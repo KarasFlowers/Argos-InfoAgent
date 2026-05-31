@@ -57,6 +57,22 @@ class BoardUpdateRequest(BaseModel):
     prompt_key: Optional[str] = None
 
 
+class BoardPreviewRequest(BaseModel):
+    slug: str = Field(default="preview-board", min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$")
+    name: str = Field(default="预览板块", min_length=1, max_length=128)
+    icon: str = Field(default="📌", max_length=32)
+    description: str = Field(default="", max_length=500)
+    system_prompt: str = Field(default="", max_length=4000)
+    source_type: str = Field(default="rss", max_length=32)
+    source_config: dict = Field(default_factory=dict)
+    schedule: str = Field(default="")
+    notify_channels: str = Field(default="")
+    perspectives: Optional[dict] = None
+    prompt_key: str = Field(default="daily_briefing")
+    original_slug: Optional[str] = Field(default=None, max_length=64, pattern=r"^[a-z0-9_\-]+$")
+    perspective: str = Field(default="overview", max_length=64)
+
+
 class BoardWizardMessage(BaseModel):
     role: str = Field(pattern=r"^(user|assistant)$")
     content: str = Field(min_length=1, max_length=4000)
@@ -412,18 +428,13 @@ async def generate_summary(
         if active_perspectives and len(active_perspectives) > 1:
             # Multi-perspective generation
             from app.services.llm_service import llm_service
-            from app.services.source_adapters import get_adapter as _get_adapter
-
-            # Re-fetch content items from the adapter for perspective generation
-            content_items = []
-            if hasattr(adapter, '_last_content_items'):
-                content_items = adapter._last_content_items
 
             perspective_results = await llm_service.generate_perspective_summaries(
-                content_items=content_items,
+                content_items=[],
                 session=session,
                 board=board_obj,
                 perspectives=active_perspectives,
+                seed_summary=summary,
             )
 
             # Persist all perspective summaries
@@ -816,6 +827,71 @@ def _serialize_board(board) -> dict:
     }
 
 
+def _validate_board_source_payload(source_type: str, source_config: dict | None) -> None:
+    from app.services.source_adapters import VALID_SOURCE_TYPES
+    if source_type not in VALID_SOURCE_TYPES:
+        raise HTTPException(status_code=400, detail=f"source_type must be one of {VALID_SOURCE_TYPES}.")
+
+    from app.models.source_configs import SOURCE_CONFIG_MODELS
+    config_model = SOURCE_CONFIG_MODELS.get(source_type)
+    if config_model and source_config:
+        try:
+            config_model.model_validate(source_config)
+        except Exception as val_err:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid source_config for type '{source_type}': {val_err}",
+            )
+
+
+async def _run_board_preview_runtime(
+    board,
+    session: AsyncSession,
+    perspective: str = "overview",
+):
+    from app.services.source_adapters import get_adapter, UnknownSourceTypeError
+
+    if not board.is_active:
+        raise HTTPException(status_code=400, detail="Cannot preview an inactive board.")
+
+    try:
+        adapter = get_adapter(board.source_type)
+    except UnknownSourceTypeError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    try:
+        summary_resp, _ = await adapter.produce(board, session)
+        if not summary_resp:
+            raise HTTPException(status_code=500, detail="Adapter returned no content for preview.")
+
+        active_perspectives = None
+        if board.perspectives and isinstance(board.perspectives, dict):
+            active_perspectives = board.perspectives.get("active")
+
+        if active_perspectives and len(active_perspectives) > 1:
+            perspective_results = await llm_service.generate_perspective_summaries(
+                content_items=[],
+                session=session,
+                board=board,
+                perspectives=active_perspectives,
+                seed_summary=summary_resp,
+            )
+            requested = None
+            for persp_summary, _ in perspective_results:
+                if persp_summary and persp_summary.perspective == perspective:
+                    requested = persp_summary
+                    break
+            if not requested:
+                requested = next((item for item, _ in perspective_results if item), summary_resp)
+            summary_resp = requested
+
+        return summary_resp
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Preview failed: {str(error)}")
+
+
 @api_router.get("/boards")
 async def list_boards(
     include_inactive: bool = False,
@@ -835,20 +911,7 @@ async def create_board(
     existing = await db_service.get_board_by_slug(session, payload.slug)
     if existing:
         raise HTTPException(status_code=409, detail=f"Board '{payload.slug}' already exists.")
-    from app.services.source_adapters import VALID_SOURCE_TYPES
-    if payload.source_type not in VALID_SOURCE_TYPES:
-        raise HTTPException(status_code=400, detail=f"source_type must be one of {VALID_SOURCE_TYPES}.")
-    # Validate source_config against the per-type schema
-    from app.models.source_configs import SOURCE_CONFIG_MODELS
-    config_model = SOURCE_CONFIG_MODELS.get(payload.source_type)
-    if config_model and payload.source_config:
-        try:
-            config_model.model_validate(payload.source_config)
-        except Exception as val_err:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid source_config for type '{payload.source_type}': {val_err}",
-            )
+    _validate_board_source_payload(payload.source_type, payload.source_config)
     board = await db_service.create_board(
         session,
         slug=payload.slug,
@@ -915,6 +978,43 @@ async def get_board_perspectives(slug: str, session: AsyncSession = Depends(get_
     return {"perspectives": active, "default": active[0] if active else "overview"}
 
 
+@api_router.post("/boards/preview")
+async def preview_board_from_payload(
+    payload: BoardPreviewRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Run preview directly from the current board form payload without saving."""
+    _validate_board_source_payload(payload.source_type, payload.source_config)
+
+    from app.models.domain import Board
+
+    base_board = None
+    if payload.original_slug:
+        base_board = await db_service.get_board_by_slug(session, payload.original_slug)
+        if not base_board:
+            raise HTTPException(status_code=404, detail=f"Board '{payload.original_slug}' not found.")
+
+    runtime_board = Board(
+        id=base_board.id if base_board else None,
+        slug=payload.slug,
+        name=payload.name,
+        icon=payload.icon,
+        description=payload.description,
+        system_prompt=payload.system_prompt,
+        source_type=payload.source_type,
+        source_config=payload.source_config,
+        display_order=base_board.display_order if base_board else 0,
+        is_active=base_board.is_active if base_board else True,
+        is_default=base_board.is_default if base_board else False,
+        schedule=payload.schedule,
+        notify_channels=payload.notify_channels,
+        perspectives=payload.perspectives,
+        prompt_key=payload.prompt_key,
+    )
+
+    return await _run_board_preview_runtime(runtime_board, session, perspective=payload.perspective)
+
+
 @api_router.post("/boards/{slug}/preview")
 async def preview_board(slug: str, session: AsyncSession = Depends(get_session)):
     """
@@ -924,25 +1024,7 @@ async def preview_board(slug: str, session: AsyncSession = Depends(get_session))
     board = await db_service.get_board_by_slug(session, slug)
     if not board:
         raise HTTPException(status_code=404, detail=f"Board '{slug}' not found.")
-        
-    if not board.is_active:
-        raise HTTPException(status_code=400, detail="Cannot preview an inactive board.")
-        
-    from app.services.source_adapters import get_adapter, UnknownSourceTypeError
-    try:
-        adapter = get_adapter(board.source_type)
-    except UnknownSourceTypeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-        
-    try:
-        # Run the adapter. Most adapters will generate the summary.
-        # We don't save the result to the database because we don't invoke db_service.save_summary.
-        summary_resp, _ = await adapter.produce(board, session)
-        if not summary_resp:
-            raise HTTPException(status_code=500, detail="Adapter returned no content for preview.")
-        return summary_resp
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Preview failed: {str(e)}")
+    return await _run_board_preview_runtime(board, session)
 
 
 @api_router.patch("/boards/{slug}")
@@ -953,24 +1035,14 @@ async def update_board(
 ):
     """Update a board's metadata/config."""
     updates = payload.model_dump(exclude_unset=True)
-    from app.services.source_adapters import VALID_SOURCE_TYPES
-    if "source_type" in updates and updates["source_type"] not in VALID_SOURCE_TYPES:
-        raise HTTPException(status_code=400, detail=f"source_type must be one of {VALID_SOURCE_TYPES}.")
-    # Validate source_config (as dict) against the per-type schema
-    if "source_config" in updates and updates["source_config"] is not None:
-        st = updates.get("source_type")  # may be None if not changing
-        if st:
-            from app.models.source_configs import SOURCE_CONFIG_MODELS
-            config_model = SOURCE_CONFIG_MODELS.get(st)
-            if config_model:
-                try:
-                    config_model.model_validate(updates["source_config"])
-                except Exception as val_err:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"Invalid source_config for type '{st}': {val_err}",
-                    )
-        # source_config is a native JSON column; pass dict directly
+    existing_board = None
+    if "source_type" in updates or ("source_config" in updates and updates["source_config"] is not None):
+        existing_board = await db_service.get_board_by_slug(session, slug)
+        if not existing_board:
+            raise HTTPException(status_code=404, detail=f"Board '{slug}' not found.")
+        effective_source_type = updates.get("source_type", existing_board.source_type)
+        effective_source_config = updates.get("source_config", existing_board.source_config)
+        _validate_board_source_payload(effective_source_type, effective_source_config)
     board = await db_service.update_board(session, slug, updates)
     if not board:
         raise HTTPException(status_code=404, detail=f"Board '{slug}' not found.")
