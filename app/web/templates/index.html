@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/index.css?v=10">
+    <link rel="stylesheet" href="/static/index.css?v=14">
     <script>
         // Apply theme before first paint to avoid flash of dark background
         try {
@@ -27,40 +27,40 @@
             <h1 class="title" id="summary-date">正在加载简报...</h1>
             <div class="header-actions">
                 <button id="persona-btn" class="back-btn" onclick="togglePersonaPanel()" title="查看我的偏好设置">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                     我的偏好
                 </button>
                 <button id="refresh-btn" class="back-btn" style="display:none;" onclick="openRefreshModal()" title="重新抓取并生成简报">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                     重新生成
                 </button>
                 <button id="magazine-btn" class="back-btn" onclick="toggleMagazinePanel()" title="查看本周深度周刊">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
                     周刊
                 </button>
                 <button id="catchup-btn" class="back-btn" onclick="toggleCatchupPanel()" title="精炼补读：总结未读内容">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path><line x1="9" y1="10" x2="15" y2="10"></line><line x1="9" y1="14" x2="13" y2="14"></line></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path><line x1="9" y1="10" x2="15" y2="10"></line><line x1="9" y1="14" x2="13" y2="14"></line></svg>
                     补读 <span id="catchup-badge" class="catchup-badge" style="display:none">0</span>
                 </button>
                 <button id="history-btn" class="back-btn" onclick="toggleHistoryPanel()" title="查看历史记录归档">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                     往日
                 </button>
                 <button id="insights-btn" class="back-btn" onclick="toggleInsightsPanel()" title="查看跨天话题洞察">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
                     洞察
                 </button>
                 <button id="sources-btn" class="back-btn" onclick="toggleSourcesPanel()" title="管理信息源">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                     信息源
                 </button>
                 <button id="stats-btn" class="back-btn" onclick="toggleStatsPanel()" title="查看数据统计">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
                     统计
                 </button>
                 <button id="theme-toggle" class="back-btn" onclick="toggleTheme()" title="切换浅色/深色主题">
-                    <svg id="theme-icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
-                    <svg id="theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                    <svg id="theme-icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                    <svg id="theme-icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
                 </button>
             </div>
         </header>
@@ -75,7 +75,9 @@
             <div class="modal-content persona-modal-content">
                 <div class="persona-header">
                     <h3>偏好设置</h3>
-                    <button class="close-btn" onclick="togglePersonaPanel()">&times;</button>
+                    <button class="close-btn" onclick="togglePersonaPanel()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
                 <div class="persona-body">
                     <div class="persona-section">
@@ -132,7 +134,9 @@
             <div class="modal-content history-modal-content">
                 <div class="persona-header">
                     <h3>历史简报归档</h3>
-                    <button class="close-btn" onclick="toggleHistoryPanel()">&times;</button>
+                    <button class="close-btn" onclick="toggleHistoryPanel()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
                 <div class="persona-section history-modal-body">
                     <div class="history-filter-bar">
@@ -152,7 +156,9 @@
             <div class="modal-content catchup-modal-content">
                 <div class="persona-header">
                     <h3>精炼补读</h3>
-                    <button class="close-btn" onclick="toggleCatchupPanel()">&times;</button>
+                    <button class="close-btn" onclick="toggleCatchupPanel()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
                 <div class="catchup-body">
                     <div id="catchup-status" class="catchup-status">
@@ -178,7 +184,9 @@
                         <span class="magazine-badge">WEEKLY INSIGHT</span>
                         <h3>本周深度周刊</h3>
                     </div>
-                    <button class="close-btn" onclick="toggleMagazinePanel()">&times;</button>
+                    <button class="close-btn" onclick="toggleMagazinePanel()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
                 <div class="magazine-body">
                     <div id="magazine-recap-stats"></div>
@@ -199,7 +207,9 @@
             <div class="modal-content insights-modal-content">
                 <div class="persona-header">
                     <h3>跨天话题洞察</h3>
-                    <button class="close-btn" onclick="toggleInsightsPanel()">&times;</button>
+                    <button class="close-btn" onclick="toggleInsightsPanel()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
                 <div class="insights-body">
                     <div class="insights-controls">
@@ -234,7 +244,9 @@
                         <h3>信息源管理</h3>
                         <p class="sources-subtitle" id="sources-board-label">当前板块: --</p>
                     </div>
-                    <button class="close-btn" onclick="toggleSourcesPanel()">&times;</button>
+                    <button class="close-btn" onclick="toggleSourcesPanel()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
                 </div>
                 <div class="sources-body">
                     <!-- Add New Source -->
@@ -317,16 +329,16 @@
         <div class="modal-content">
             <h3>重新调教简报</h3>
             <p>你可以增加额外的指令来引导 AI 生成今日简报：</p>
-            <textarea id="refresh-prompt" placeholder="例如：今天只看关于人工智能的新闻，或者帮我把每条新闻缩短一点..."></textarea>
+            <textarea id="refresh-preference" placeholder="例如：今天只看关于人工智能的新闻，或者帮我把每条新闻缩短一点..."></textarea>
             <div class="modal-options">
                 <label>
-                    <input type="checkbox" id="refresh-save-persona">
+                    <input type="checkbox" id="save-preference-chk">
                     同时将其保存为长期偏好
                 </label>
             </div>
             <div class="modal-btns">
                 <button class="secondary-btn" onclick="closeRefreshModal()">取消</button>
-                <button class="primary-btn" onclick="submitRefresh()">重新生成</button>
+                <button class="primary-btn" onclick="confirmForceRefresh()">重新生成</button>
             </div>
         </div>
     </div>
@@ -336,7 +348,9 @@
         <div class="modal-content stats-modal-content" style="max-width: 680px;">
             <div class="persona-header">
                 <h3>数据统计</h3>
-                <button class="close-btn" onclick="toggleStatsPanel()">&times;</button>
+                <button class="close-btn" onclick="toggleStatsPanel()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
             </div>
             <div class="stats-modal-body">
                 <div id="category-nav" class="category-nav"></div>
@@ -424,8 +438,8 @@
                 <input type="hidden" id="board-original-slug" value="">
 
                 <div class="form-group">
-                    <label>标识符 (Slug) <small>只允许英文字母、数字和横线，唯一标识</small></label>
-                    <input type="text" id="board-slug" required pattern="[a-zA-Z0-9\-]+" placeholder="e.g. english-learning">
+                    <label>标识符 (Slug) <small>只允许小写字母、数字、下划线和横线，唯一标识</small></label>
+                    <input type="text" id="board-slug" required pattern="[a-z0-9_\-]+" placeholder="e.g. english_learning">
                 </div>
                 <div class="form-group">
                     <label>显示名称</label>
@@ -446,6 +460,8 @@
                         <option value="multi">混合数据源</option>
                     </select>
                 </div>
+
+                <div id="board-config-summary" class="board-config-summary" aria-live="polite"></div>
 
                 <!-- RSS Config -->
                 <div class="board-source-config" id="board-cfg-rss">
@@ -552,18 +568,24 @@
                     </div>
                 </div>
 
+                <div id="board-form-feedback" class="board-form-feedback" style="display:none;" role="status" aria-live="polite"></div>
+
                 <div class="modal-btns" style="margin-top: 1rem;">
-                    <button type="button" class="secondary-btn" id="board-preview-btn" style="display:none; color:var(--accent-color);" onclick="previewBoard()">试运行 (Preview)</button>
+                    <button type="button" class="secondary-btn" id="board-preview-btn" style="display:none; color:var(--accent-color);" onclick="previewBoard()">试运行当前配置</button>
                     <button type="button" class="secondary-btn" id="board-delete-btn" style="display:none; color:#ff4444; border-color:#ff4444;" onclick="deleteBoard()">删除此板块</button>
                     <div style="flex:1;"></div>
                     <button type="button" class="secondary-btn" onclick="closeBoardModal()">取消</button>
-                    <button type="submit" class="primary-btn">保存</button>
+                    <button type="submit" id="board-save-btn" class="primary-btn">保存</button>
                 </div>
             </form>
             
-            <div id="board-preview-result" style="display:none; margin-top: 1.5rem; padding: 1rem; border: 1px dashed var(--border-color); border-radius: var(--radius-md); background: var(--surface-color);">
-                <h4 style="margin-bottom: 0.5rem; color: var(--text-primary);">试运行结果 <button onclick="document.getElementById('board-preview-result').style.display='none'" style="float:right; background:none; border:none; color:var(--text-secondary); cursor:pointer;">&times;</button></h4>
-                <div id="board-preview-content" style="font-size: 0.85rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;"></div>
+            <div id="board-preview-result" class="board-preview-result" style="display:none;">
+                <div class="board-preview-result__header">
+                    <h4>试运行结果</h4>
+                    <button type="button" class="board-preview-result__close" onclick="hideBoardPreviewResult()" aria-label="关闭试运行结果">&times;</button>
+                </div>
+                <p id="board-preview-hint" class="board-preview-result__hint">当前试运行会基于表单里的最新配置，不会自动保存到数据库。</p>
+                <div id="board-preview-content" class="board-preview-content"></div>
             </div>
 
             <!-- Footer when wizard is active -->
@@ -574,6 +596,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/static/app.js?v=3"></script>
+    <script src="/static/app.js?v=8"></script>
 </body>
 </html>

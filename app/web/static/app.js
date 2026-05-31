@@ -8,9 +8,30 @@ let historyViewStatus = {};  // date -> viewed_at | null
 let currentBoardSlug = null;
 let availableBoards = [];
 let availablePromptTemplates = [];
+let overlayFocusStack = [];
 
 const SUMMARY_LOADING_TEXT = 'AI 编辑正在努力生成今日简报，这可能需要几十秒...';
 const SUMMARY_CACHE_KEY = 'argos_summary_cache';
+const OVERLAY_FOCUSABLE_SELECTOR = [
+    'button:not([disabled])',
+    '[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+].join(', ');
+const OVERLAY_DIALOG_LABELS = {
+    'persona-panel': '偏好设置',
+    'history-modal': '历史简报归档',
+    'catchup-modal': '精炼补读',
+    'magazine-modal': '本周深度周刊',
+    'insights-modal': '跨天话题洞察',
+    'sources-modal': '信息源管理',
+    'refresh-modal': '重新调教简报',
+    'stats-modal': '数据统计',
+    'board-modal': '板块管理',
+    'rag-panel': '深度追问'
+};
 
 const ICONS = {
     external: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>',
@@ -21,17 +42,25 @@ const ICONS = {
 
 document.addEventListener('DOMContentLoaded', async () => {
     _initTheme();
-    await initBoards();
-    await loadPromptTemplates();
-    // Try to render cached data immediately, then refresh in background
+    _primeBoardSlugFromStorage();
+    setupOverlayExperience();
+    setupBoardFormExperience();
+
+    // Render any same-day cache before non-critical bootstrap work.
     const cached = _loadCachedSummary();
     if (cached) {
         _renderSummaryData(cached);
     }
-    fetchSummary();
+
+    const promptTemplatesPromise = loadPromptTemplates();
+
     setupRagPanel();
     setupHistoryPanel();
     _refreshCatchupBadge();
+
+    await initBoards();
+    fetchSummary();
+    await promptTemplatesPromise;
 });
 
 function _initTheme() {
@@ -57,6 +86,175 @@ function _updateThemeIcon() {
     const moon = document.getElementById('theme-icon-moon');
     if (sun) sun.style.display = isLight ? 'none' : 'inline-block';
     if (moon) moon.style.display = isLight ? 'inline-block' : 'none';
+}
+
+function setupOverlayExperience() {
+    Object.entries(OVERLAY_DIALOG_LABELS).forEach(([id, label]) => {
+        const element = document.getElementById(id);
+        if (!element) return;
+        element.setAttribute('role', 'dialog');
+        element.setAttribute('aria-modal', 'true');
+        element.setAttribute('aria-label', label);
+    });
+
+    document.addEventListener('keydown', handleOverlayEscape);
+    syncOverlayState();
+}
+
+function _primeBoardSlugFromStorage() {
+    try {
+        const saved = localStorage.getItem('argos_board');
+        if (saved) {
+            currentBoardSlug = saved;
+        }
+    } catch (_) {
+        currentBoardSlug = null;
+    }
+}
+
+function rememberOverlayTrigger(container = null) {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && (!container || !container.contains(active))) {
+        overlayFocusStack.push(active);
+    } else {
+        overlayFocusStack.push(null);
+    }
+}
+
+function restoreOverlayTrigger() {
+    while (overlayFocusStack.length > 0) {
+        const trigger = overlayFocusStack.pop();
+        if (trigger && trigger.isConnected) {
+            _focusElement(trigger);
+            return;
+        }
+    }
+}
+
+function _focusElement(element) {
+    if (!element || typeof element.focus !== 'function') return;
+    const runFocus = () => {
+        if (element.isConnected) {
+            try {
+                element.focus({ preventScroll: true });
+            } catch (_) {
+                element.focus();
+            }
+        }
+    };
+    runFocus();
+    requestAnimationFrame(runFocus);
+    setTimeout(runFocus, 0);
+}
+
+function focusOverlayElement(container, preferredSelector = null) {
+    if (!container) return;
+    const preferred = preferredSelector ? container.querySelector(preferredSelector) : null;
+    const fallback = container.querySelector(OVERLAY_FOCUSABLE_SELECTOR);
+    const target = preferred || fallback;
+    _focusElement(target);
+}
+
+function isOverlayOpen(element) {
+    return !!(element && element.classList.contains('active'));
+}
+
+function isRagPanelOpen() {
+    const panel = document.getElementById('rag-panel');
+    return !!(panel && panel.classList.contains('open'));
+}
+
+function syncOverlayState() {
+    const hasOpenModal = !!document.querySelector('.modal-overlay.active');
+    document.body.classList.toggle('is-overlay-open', hasOpenModal || isRagPanelOpen());
+}
+
+function openOverlay(element, preferredSelector = null) {
+    if (!element || isOverlayOpen(element)) return;
+    rememberOverlayTrigger(element);
+    element.classList.add('active');
+    syncOverlayState();
+    focusOverlayElement(element, preferredSelector);
+}
+
+function closeOverlay(element, { restoreFocus = true } = {}) {
+    if (!element || !isOverlayOpen(element)) return;
+    element.classList.remove('active');
+    syncOverlayState();
+    if (restoreFocus) {
+        restoreOverlayTrigger();
+    }
+}
+
+function toggleOverlay(element, preferredSelector = null) {
+    if (!element) return false;
+    if (isOverlayOpen(element)) {
+        closeOverlay(element);
+        return false;
+    }
+    openOverlay(element, preferredSelector);
+    return true;
+}
+
+function openRagOverlay(preferredSelector = '#rag-close-btn') {
+    const panel = document.getElementById('rag-panel');
+    const overlay = document.getElementById('rag-overlay');
+    if (!panel || !overlay) return;
+    if (!panel.classList.contains('open')) {
+        rememberOverlayTrigger(panel);
+    }
+    overlay.classList.add('visible');
+    panel.classList.add('open');
+    syncOverlayState();
+    focusOverlayElement(panel, preferredSelector);
+}
+
+function closeRagOverlay({ restoreFocus = true } = {}) {
+    const panel = document.getElementById('rag-panel');
+    const overlay = document.getElementById('rag-overlay');
+    if (panel) panel.classList.remove('open');
+    if (overlay) overlay.classList.remove('visible');
+    syncOverlayState();
+    if (restoreFocus) {
+        restoreOverlayTrigger();
+    }
+}
+
+function handleOverlayEscape(event) {
+    if (event.key !== 'Escape') return;
+    if (dismissTopOverlay()) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+}
+
+function dismissTopOverlay() {
+    const dismissOrder = [
+        ['board-modal', closeBoardModal],
+        ['refresh-modal', closeRefreshModal],
+        ['stats-modal', toggleStatsPanel],
+        ['sources-modal', toggleSourcesPanel],
+        ['insights-modal', toggleInsightsPanel],
+        ['magazine-modal', toggleMagazinePanel],
+        ['catchup-modal', toggleCatchupPanel],
+        ['history-modal', toggleHistoryPanel],
+        ['persona-panel', togglePersonaPanel]
+    ];
+
+    for (const [id, closeFn] of dismissOrder) {
+        const element = document.getElementById(id);
+        if (isOverlayOpen(element)) {
+            closeFn();
+            return true;
+        }
+    }
+
+    if (isRagPanelOpen()) {
+        closeRagPanel();
+        return true;
+    }
+
+    return false;
 }
 
 function clearElement(element) {
@@ -118,7 +316,10 @@ async function initBoards() {
         availableBoards = await res.json();
         
         const container = document.getElementById('board-tabs');
-        if (availableBoards.length === 0) return;
+        if (availableBoards.length === 0) {
+            currentBoardSlug = null;
+            return;
+        }
 
         // Determine initial active board from localStorage or first default
         const saved = localStorage.getItem('argos_board');
@@ -132,6 +333,7 @@ async function initBoards() {
         container.style.display = 'flex';
         renderBoardTabs();
     } catch (e) {
+        currentBoardSlug = null;
         console.error("Failed to initialize boards", e);
     }
 }
@@ -229,8 +431,8 @@ function switchBoard(slug) {
     renderBoardTabs();
     
     // Close panels if open
-    document.getElementById('persona-panel').classList.remove('active');
-    document.getElementById('insights-modal').style.display = 'none';
+    closeOverlay(document.getElementById('persona-panel'), { restoreFocus: false });
+    closeOverlay(document.getElementById('insights-modal'), { restoreFocus: false });
     
     // Try to show cached data for new board immediately
     latestData = null;
@@ -312,12 +514,492 @@ const PRESET_TEMPLATES = {
     }
 };
 
+const BOARD_SOURCE_TYPE_META = {
+    rss: { label: 'RSS 订阅源' },
+    pure_llm: { label: '纯 LLM 生成' },
+    hackernews: { label: 'Hacker News 热帖' },
+    reddit: { label: 'Reddit 社区' },
+    github: { label: 'GitHub 动态' },
+    multi: { label: '混合数据源' }
+};
+let boardFormBaseline = '';
+let boardFormDirty = false;
+let boardHasSavedVersion = false;
+
 function applyPresetTemplate(presetKey) {
     const tpl = PRESET_TEMPLATES[presetKey];
     if (!tpl) return;
     
     wizardLastConfig = tpl;
     applyWizardConfig();
+}
+
+function setupBoardFormExperience() {
+    const form = document.getElementById('board-form');
+    if (!form || form.dataset.enhanced === 'true') return;
+
+    const refreshSummary = (event) => {
+        if (!(event.target instanceof HTMLElement)) return;
+        clearBoardFormFeedback();
+        syncBoardFormState({ fromInput: true });
+        if (event.target.id !== 'board-source-type') {
+            renderBoardConfigSummary();
+        }
+    };
+
+    form.addEventListener('input', refreshSummary);
+    form.addEventListener('change', refreshSummary);
+    form.dataset.enhanced = 'true';
+    renderBoardConfigSummary();
+}
+
+function openBoardAdvancedSettings() {
+    const panel = document.getElementById('board-advanced-settings');
+    const toggleBtn = document.querySelector('.section-toggle-btn');
+    if (panel) panel.style.display = 'block';
+    if (toggleBtn) toggleBtn.classList.add('open');
+}
+
+function setBoardFormFeedback(type, message) {
+    const feedback = document.getElementById('board-form-feedback');
+    if (!feedback) return;
+    feedback.className = `board-form-feedback board-form-feedback--${type}`;
+    feedback.textContent = message;
+    feedback.style.display = 'block';
+    feedback.setAttribute('role', type === 'error' ? 'alert' : 'status');
+}
+
+function clearBoardFormFeedback() {
+    const feedback = document.getElementById('board-form-feedback');
+    if (!feedback) return;
+    feedback.textContent = '';
+    feedback.style.display = 'none';
+    feedback.className = 'board-form-feedback';
+    feedback.setAttribute('role', 'status');
+}
+
+function getBoardFieldValue(id, fallback = '') {
+    return document.getElementById(id)?.value ?? fallback;
+}
+
+function captureBoardFormFingerprint() {
+    const sourceType = getBoardFieldValue('board-source-type', 'rss');
+    return JSON.stringify({
+        slug: getBoardFieldValue('board-slug').trim(),
+        name: getBoardFieldValue('board-name').trim(),
+        icon: getBoardFieldValue('board-icon').trim(),
+        sourceType,
+        source: {
+            rssFeeds: getBoardFieldValue('board-rss-feeds').trim(),
+            llmItems: getBoardFieldValue('board-llm-items', '5').trim(),
+            llmStyle: getBoardFieldValue('board-llm-style').trim(),
+            hnTop: getBoardFieldValue('board-hn-top', '30').trim(),
+            hnScore: getBoardFieldValue('board-hn-score', '100').trim(),
+            redditSubs: getBoardFieldValue('board-reddit-subs').trim(),
+            redditComments: getBoardFieldValue('board-reddit-comments', '5').trim(),
+            githubRepos: getBoardFieldValue('board-github-repos').trim(),
+            githubUsers: getBoardFieldValue('board-github-users').trim(),
+            multiJson: getBoardFieldValue('board-multi-json').trim(),
+        },
+        promptKey: getBoardFieldValue('board-prompt-key', 'daily_briefing').trim(),
+        prompt: getBoardFieldValue('board-prompt').trim(),
+        schedule: getBoardFieldValue('board-schedule').trim(),
+        notifyChannels: getBoardFieldValue('board-notify').trim(),
+        perspectives: getBoardFieldValue('board-perspectives').trim(),
+    });
+}
+
+function updateBoardPreviewHint() {
+    const hint = document.getElementById('board-preview-hint');
+    if (!hint) return;
+    if (!boardHasSavedVersion) {
+        hint.textContent = '当前试运行会基于表单里的临时配置，不会写入数据库。确认效果后再保存即可。';
+        return;
+    }
+    if (boardFormDirty) {
+        hint.textContent = '当前试运行会读取表单里的最新修改，但不会自动保存到数据库。';
+        return;
+    }
+    hint.textContent = '当前试运行会基于表单里的最新配置，不会自动保存到数据库。';
+}
+
+function resetBoardFormState({ hasSavedVersion = false } = {}) {
+    boardHasSavedVersion = hasSavedVersion;
+    boardFormBaseline = captureBoardFormFingerprint();
+    boardFormDirty = false;
+    updateBoardPreviewHint();
+}
+
+function syncBoardFormState({ fromInput = false } = {}) {
+    const nextDirty = captureBoardFormFingerprint() !== boardFormBaseline;
+    const dirtyChanged = nextDirty !== boardFormDirty;
+    boardFormDirty = nextDirty;
+    updateBoardPreviewHint();
+
+    if (dirtyChanged && boardFormDirty && fromInput) {
+        const previewResult = document.getElementById('board-preview-result');
+        if (previewResult?.style.display !== 'none') {
+            hideBoardPreviewResult();
+            setBoardFormFeedback('info', '你已修改配置，上一份试运行结果已失效。重新试运行即可验证当前表单。');
+        }
+    }
+
+    return boardFormDirty;
+}
+
+function splitBoardLines(raw) {
+    return String(raw || '')
+        .split('\n')
+        .map((value) => value.trim())
+        .filter(Boolean);
+}
+
+function splitBoardNotifyChannels(raw) {
+    return String(raw || '')
+        .split(/[,\n，]/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+}
+
+function parseBoardJson(raw, label) {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) {
+        return { ok: true, value: null };
+    }
+    try {
+        return { ok: true, value: JSON.parse(trimmed) };
+    } catch {
+        return { ok: false, error: `${label} JSON 格式不正确，请先修正。` };
+    }
+}
+
+function parseBoardGithubRepos(raw) {
+    const repos = [];
+    const invalidLines = [];
+    splitBoardLines(raw).forEach((line) => {
+        const parts = line.split('/').map((value) => value.trim());
+        if (parts.length !== 2 || !parts[0] || !parts[1]) {
+            invalidLines.push(line);
+            return;
+        }
+        repos.push({ owner: parts[0], repo: parts[1] });
+    });
+    return { repos, invalidLines };
+}
+
+function parseBoardRedditSubreddits(raw) {
+    return splitBoardLines(raw).map((line) => {
+        const parts = line.split(/\s+/);
+        if (!parts[0]) return null;
+        return {
+            subreddit: parts[0],
+            sort: parts[1] || 'hot',
+            min_score: parseInt(parts[2], 10) || 10,
+        };
+    }).filter(Boolean);
+}
+
+function mergeBoardSummaryState(current, next) {
+    const rank = { ready: 0, attention: 1, invalid: 2 };
+    return (rank[next] || 0) > (rank[current] || 0) ? next : current;
+}
+
+function buildBoardFormPayload({ forPreview = false } = {}) {
+    const isEdit = document.getElementById('board-is-edit').value === 'true';
+    const originalSlug = document.getElementById('board-original-slug').value.trim();
+
+    const slugRaw = document.getElementById('board-slug').value.trim();
+    const nameRaw = document.getElementById('board-name').value.trim();
+    const iconRaw = document.getElementById('board-icon').value.trim();
+    const sourceType = document.getElementById('board-source-type').value;
+    const prompt = document.getElementById('board-prompt').value.trim();
+    const promptKey = document.getElementById('board-prompt-key').value;
+    const schedule = document.getElementById('board-schedule').value.trim();
+    const notifyChannels = document.getElementById('board-notify').value.trim();
+
+    if (slugRaw && !/^[a-z0-9_-]+$/.test(slugRaw)) {
+        setBoardFormFeedback('error', '标识符只允许小写字母、数字、下划线和横线。');
+        document.getElementById('board-slug')?.focus();
+        return null;
+    }
+
+    let perspectives = null;
+    const perspectivesRaw = document.getElementById('board-perspectives').value.trim();
+    if (perspectivesRaw) {
+        const parsed = parseBoardJson(perspectivesRaw, '多视角配置');
+        if (!parsed.ok) {
+            openBoardAdvancedSettings();
+            setBoardFormFeedback('error', parsed.error);
+            document.getElementById('board-perspectives')?.focus();
+            return null;
+        }
+        perspectives = parsed.value;
+    }
+
+    const sourceConfig = _collectSourceConfig(sourceType);
+    if (sourceConfig === null) return null;
+
+    const placeholderFields = [];
+    const slug = slugRaw || (forPreview ? (originalSlug || 'preview-board') : slugRaw);
+    const name = nameRaw || (forPreview ? '预览板块' : nameRaw);
+    const icon = iconRaw || '📌';
+
+    if (forPreview) {
+        if (!slugRaw) placeholderFields.push('标识符');
+        if (!nameRaw) placeholderFields.push('显示名称');
+    }
+
+    const payload = {
+        slug,
+        name,
+        icon,
+        source_type: sourceType,
+        system_prompt: prompt || null,
+        source_config: sourceConfig,
+        prompt_key: promptKey,
+        schedule,
+        notify_channels: notifyChannels,
+        perspectives,
+    };
+
+    if (forPreview) {
+        payload.original_slug = isEdit ? originalSlug : null;
+        payload.perspective = 'overview';
+    }
+
+    return {
+        isEdit,
+        originalSlug,
+        payload,
+        meta: {
+            placeholderFields,
+        }
+    };
+}
+
+function setBoardButtonBusyState(button, isBusy, busyText) {
+    if (!button) return;
+    if (!button.dataset.defaultText) {
+        button.dataset.defaultText = button.textContent;
+    }
+    button.disabled = isBusy;
+    button.textContent = isBusy ? busyText : button.dataset.defaultText;
+}
+
+function setBoardActionState({ saving = false, deleting = false, previewing = false } = {}) {
+    const saveBtn = document.getElementById('board-save-btn');
+    const previewBtn = document.getElementById('board-preview-btn');
+    const deleteBtn = document.getElementById('board-delete-btn');
+
+    setBoardButtonBusyState(saveBtn, saving, '保存中...');
+    setBoardButtonBusyState(previewBtn, previewing, '运行中...');
+    setBoardButtonBusyState(deleteBtn, deleting, '删除中...');
+
+    if (previewBtn) previewBtn.disabled = saving || deleting || previewing;
+    if (deleteBtn) deleteBtn.disabled = saving || deleting || previewing;
+    if (saveBtn) saveBtn.disabled = saving || deleting || previewing;
+}
+
+function applyBoardRecordToForm(board) {
+    if (!board) return;
+    document.getElementById('board-slug').value = board.slug || '';
+    document.getElementById('board-name').value = board.name || '';
+    document.getElementById('board-icon').value = board.icon || '📌';
+    document.getElementById('board-source-type').value = board.source_type || 'rss';
+    document.getElementById('board-prompt').value = board.system_prompt || '';
+    document.getElementById('board-prompt-key').value = board.prompt_key || 'daily_briefing';
+    document.getElementById('board-schedule').value = board.schedule || '';
+    document.getElementById('board-notify').value = board.notify_channels || '';
+
+    const perspectives = board.perspectives || {};
+    document.getElementById('board-perspectives').value = Object.keys(perspectives).length > 0
+        ? JSON.stringify(perspectives)
+        : '';
+
+    _populateSourceConfigForm(board.source_type, board.source_config || {});
+    toggleBoardSourceConfig();
+}
+
+function setBoardModalToEditState(board) {
+    const title = document.getElementById('board-modal-title');
+    const isEditInput = document.getElementById('board-is-edit');
+    const originalSlugInput = document.getElementById('board-original-slug');
+    const deleteBtn = document.getElementById('board-delete-btn');
+    const previewBtn = document.getElementById('board-preview-btn');
+    const modeTabs = document.getElementById('board-mode-tabs');
+
+    title.textContent = '设置板块';
+    isEditInput.value = 'true';
+    originalSlugInput.value = board?.slug || '';
+    document.getElementById('board-slug').disabled = true;
+
+    if (previewBtn) previewBtn.style.display = 'inline-block';
+    if (deleteBtn) {
+        deleteBtn.style.display = board?.is_default ? 'none' : 'inline-block';
+    }
+    if (modeTabs) modeTabs.style.display = 'none';
+
+    switchBoardMode('manual');
+}
+
+function renderBoardConfigSummary() {
+    const container = document.getElementById('board-config-summary');
+    const sourceType = document.getElementById('board-source-type');
+    if (!container || !sourceType) return;
+
+    const type = sourceType.value || 'rss';
+    const typeMeta = BOARD_SOURCE_TYPE_META[type] || { label: type };
+    const isEdit = document.getElementById('board-is-edit')?.value === 'true';
+    const checklist = [];
+    const notes = [];
+    let state = 'ready';
+    let headline = '';
+
+    const promptRaw = document.getElementById('board-prompt')?.value.trim() || '';
+    const scheduleRaw = document.getElementById('board-schedule')?.value.trim() || '';
+    const notifyChannels = splitBoardNotifyChannels(document.getElementById('board-notify')?.value || '');
+    const perspectivesRaw = document.getElementById('board-perspectives')?.value || '';
+    const perspectivesParsed = parseBoardJson(perspectivesRaw, '多视角配置');
+
+    switch (type) {
+        case 'rss': {
+            const feeds = splitBoardLines(document.getElementById('board-rss-feeds')?.value || '');
+            if (feeds.length === 0) {
+                state = 'attention';
+                headline = '还没有填写 RSS 地址。';
+                checklist.push('至少填写 1 个订阅地址，每行一个。');
+            } else {
+                headline = `已配置 ${feeds.length} 个 RSS 源。`;
+                checklist.push(`优先抓取：${feeds.slice(0, 2).join('、')}${feeds.length > 2 ? ' 等' : ''}`);
+            }
+            break;
+        }
+        case 'pure_llm': {
+            const itemsRaw = document.getElementById('board-llm-items')?.value || '';
+            const items = parseInt(itemsRaw, 10);
+            const style = document.getElementById('board-llm-style')?.value.trim() || '';
+            if (!Number.isFinite(items) || items < 1 || items > 15) {
+                state = 'invalid';
+                headline = '每日生成条数需要在 1 到 15 之间。';
+            } else {
+                headline = `每天生成 ${items} 条内容${style ? `，风格偏向“${style}”` : ''}。`;
+                checklist.push(style ? '已提供风格描述，生成方向更稳定。' : '风格描述可选，留空会使用默认语气。');
+            }
+            break;
+        }
+        case 'hackernews': {
+            const top = parseInt(document.getElementById('board-hn-top')?.value || '', 10);
+            const score = parseInt(document.getElementById('board-hn-score')?.value || '', 10);
+            if (!Number.isFinite(top) || top < 1 || top > 100 || !Number.isFinite(score) || score < 0) {
+                state = 'invalid';
+                headline = '热帖数量或最低分数超出允许范围。';
+            } else {
+                headline = `将抓取前 ${top} 条热帖，过滤掉低于 ${score} 分的内容。`;
+                checklist.push('适合追踪高热度技术话题与讨论。');
+            }
+            break;
+        }
+        case 'reddit': {
+            const subreddits = parseBoardRedditSubreddits(document.getElementById('board-reddit-subs')?.value || '');
+            const comments = parseInt(document.getElementById('board-reddit-comments')?.value || '', 10);
+            if (subreddits.length === 0) {
+                state = 'attention';
+                headline = '还没有填写 subreddit。';
+                checklist.push('至少填写 1 行 subreddit，例如 LocalLLaMA hot 50。');
+            } else {
+                headline = `已配置 ${subreddits.length} 个 subreddit，每帖抓取 ${Number.isFinite(comments) ? comments : 0} 条评论。`;
+                checklist.push(`当前包含：${subreddits.slice(0, 3).map((item) => item.subreddit).join('、')}${subreddits.length > 3 ? ' 等' : ''}`);
+            }
+            break;
+        }
+        case 'github': {
+            const { repos, invalidLines } = parseBoardGithubRepos(document.getElementById('board-github-repos')?.value || '');
+            const users = splitBoardLines(document.getElementById('board-github-users')?.value || '');
+            const trackedCount = repos.length + users.length;
+            if (trackedCount === 0) {
+                state = 'attention';
+                headline = '还没有填写需要追踪的仓库或用户。';
+                checklist.push('至少填写 1 个仓库或 GitHub 用户名。');
+            } else {
+                headline = `已追踪 ${repos.length} 个仓库、${users.length} 个用户。`;
+                if (repos.length > 0) {
+                    checklist.push(`仓库示例：${repos.slice(0, 2).map((repo) => `${repo.owner}/${repo.repo}`).join('、')}${repos.length > 2 ? ' 等' : ''}`);
+                }
+                if (users.length > 0) {
+                    checklist.push(`用户示例：${users.slice(0, 3).join('、')}${users.length > 3 ? ' 等' : ''}`);
+                }
+            }
+            if (invalidLines.length > 0) {
+                state = mergeBoardSummaryState(state, 'attention');
+                checklist.push(`有 ${invalidLines.length} 行仓库地址格式不正确，保存时会被忽略。`);
+            }
+            break;
+        }
+        case 'multi': {
+            const multiRaw = document.getElementById('board-multi-json')?.value || '';
+            const parsed = parseBoardJson(multiRaw, '混合数据源配置');
+            if (!multiRaw.trim()) {
+                state = 'attention';
+                headline = '还没有填写混合数据源 JSON。';
+                checklist.push('请按 JSON 结构配置各个子数据源。');
+            } else if (!parsed.ok) {
+                state = 'invalid';
+                headline = '混合数据源 JSON 目前无法解析。';
+                checklist.push(parsed.error);
+            } else {
+                const sources = parsed.value && typeof parsed.value === 'object' ? Object.keys(parsed.value) : [];
+                headline = `已配置 ${sources.length} 个子数据源。`;
+                checklist.push(`当前子源：${sources.join('、') || '暂无'}`);
+            }
+            break;
+        }
+        default:
+            headline = '请继续完善当前板块配置。';
+    }
+
+    if (promptRaw) {
+        checklist.push(`已覆盖默认系统提示词（${promptRaw.length} 字）。`);
+    }
+    if (scheduleRaw) {
+        checklist.push(`已设置单独调度：${scheduleRaw}。`);
+    }
+    if (notifyChannels.length > 0) {
+        checklist.push(`通知渠道：${notifyChannels.join('、')}。`);
+    }
+    if (perspectivesRaw.trim()) {
+        if (!perspectivesParsed.ok) {
+            state = mergeBoardSummaryState(state, 'invalid');
+            checklist.push(perspectivesParsed.error);
+        } else {
+            const activePerspectives = perspectivesParsed.value?.active;
+            const count = Array.isArray(activePerspectives) ? activePerspectives.length : Object.keys(perspectivesParsed.value || {}).length;
+            checklist.push(`已配置多视角：${count} 项。`);
+        }
+    }
+
+    if (boardHasSavedVersion) {
+        notes.push(boardFormDirty ? '当前有未保存修改，可以直接试运行这份表单，但结果不会自动保存。' : '当前配置已保存，也可以继续试运行当前表单验证效果。');
+    } else {
+        notes.push('未保存时也可以直接试运行当前表单；确认效果后再保存即可。');
+    }
+    notes.push('如果摘要状态显示“需修正”，先处理 JSON 或数量字段，再执行保存。');
+
+    const badgeMap = {
+        ready: '已就绪',
+        attention: '待补充',
+        invalid: '需修正'
+    };
+
+    container.className = `board-config-summary board-config-summary--${state}`;
+    container.innerHTML = `
+        <div class="board-config-summary__top">
+            <span class="board-config-summary__title">${escapeHtml(typeMeta.label)}</span>
+            <span class="board-config-summary__badge">${badgeMap[state] || badgeMap.ready}</span>
+        </div>
+        <p class="board-config-summary__headline">${escapeHtml(headline || '请继续完善当前板块配置。')}</p>
+        ${checklist.length > 0 ? `<ul class="board-config-summary__list">${checklist.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+        <p class="board-config-summary__note">${escapeHtml(notes.join(' '))}</p>
+    `;
 }
 
 function switchBoardMode(mode) {
@@ -336,6 +1018,7 @@ function switchBoardMode(mode) {
         wizardPanel.style.display = 'none';
         form.style.display = 'block';
         wizardFooter.style.display = 'none';
+        renderBoardConfigSummary();
     }
 }
 
@@ -459,6 +1142,9 @@ function applyWizardConfig() {
     _populateSourceConfigForm(cfg.source_type, cfg.source_config || {});
     toggleBoardSourceConfig();
     switchBoardMode('manual');
+    syncBoardFormState();
+    renderBoardConfigSummary();
+    setBoardFormFeedback('info', 'AI 推荐配置已经填入表单，你可以继续微调后再保存。');
 }
 
 function _populateSourceConfigForm(sourceType, sc) {
@@ -528,51 +1214,32 @@ function openBoardModal(slug = null) {
     const previewBtn = document.getElementById('board-preview-btn');
     const originalSlugInput = document.getElementById('board-original-slug');
     const modeTabs = document.getElementById('board-mode-tabs');
-    const previewResult = document.getElementById('board-preview-result');
     
     // reset form and wizard state
     document.getElementById('board-form').reset();
     document.getElementById('board-advanced-settings').style.display = 'none';
-    if (previewResult) previewResult.style.display = 'none';
+    clearBoardFormFeedback();
+    hideBoardPreviewResult();
+    setBoardActionState();
     const toggleBtn = document.querySelector('.section-toggle-btn');
     if (toggleBtn) toggleBtn.classList.remove('open');
     resetWizard();
 
     if (slug) {
-        // Edit mode - jump straight to manual, hide wizard tabs
-        title.textContent = '设置板块';
-        isEditInput.value = 'true';
-        originalSlugInput.value = slug;
-        deleteBtn.style.display = 'inline-block';
-        previewBtn.style.display = 'inline-block';
-        modeTabs.style.display = 'none';
-        switchBoardMode('manual');
-        
         const b = availableBoards.find(x => x.slug === slug);
         if (b) {
-            document.getElementById('board-slug').value = b.slug;
-            document.getElementById('board-slug').disabled = true;
-            document.getElementById('board-name').value = b.name;
-            document.getElementById('board-icon').value = b.icon;
-            document.getElementById('board-source-type').value = b.source_type || 'rss';
-            document.getElementById('board-prompt').value = b.system_prompt || '';
-            document.getElementById('board-prompt-key').value = b.prompt_key || 'daily_briefing';
-            document.getElementById('board-schedule').value = b.schedule || '';
-            document.getElementById('board-notify').value = b.notify_channels || '';
-            
-            const perspectives = b.perspectives || {};
-            if (Object.keys(perspectives).length > 0) {
-                document.getElementById('board-perspectives').value = JSON.stringify(perspectives);
-            } else {
-                document.getElementById('board-perspectives').value = '';
-            }
-
-            _populateSourceConfigForm(b.source_type, b.source_config || {});
-            toggleBoardSourceConfig();
-            
-            if (b.is_default) {
-                deleteBtn.style.display = 'none';
-            }
+            setBoardModalToEditState(b);
+            applyBoardRecordToForm(b);
+            resetBoardFormState({ hasSavedVersion: true });
+        } else {
+            title.textContent = '设置板块';
+            isEditInput.value = 'true';
+            originalSlugInput.value = slug;
+            deleteBtn.style.display = 'inline-block';
+            previewBtn.style.display = 'inline-block';
+            modeTabs.style.display = 'none';
+            switchBoardMode('manual');
+            resetBoardFormState({ hasSavedVersion: true });
         }
     } else {
         // Add mode - start with wizard
@@ -580,20 +1247,25 @@ function openBoardModal(slug = null) {
         isEditInput.value = 'false';
         originalSlugInput.value = '';
         deleteBtn.style.display = 'none';
-        previewBtn.style.display = 'none';
+        previewBtn.style.display = 'inline-block';
         modeTabs.style.display = 'flex';
         document.getElementById('board-slug').disabled = false;
         document.getElementById('board-source-type').value = 'rss';
         toggleBoardSourceConfig();
         switchBoardMode('wizard');
+        resetBoardFormState({ hasSavedVersion: false });
     }
     
-    modal.classList.add('active');
+    renderBoardConfigSummary();
+    openOverlay(modal, slug ? '#board-name' : '#wizard-input');
 }
 
 function closeBoardModal() {
     const modal = document.getElementById('board-modal');
-    if (modal) modal.classList.remove('active');
+    clearBoardFormFeedback();
+    hideBoardPreviewResult();
+    setBoardActionState();
+    closeOverlay(modal);
 }
 
 function toggleBoardSourceConfig() {
@@ -603,14 +1275,104 @@ function toggleBoardSourceConfig() {
     });
     const panel = document.getElementById('board-cfg-' + type);
     if (panel) panel.style.display = 'block';
+    renderBoardConfigSummary();
 }
 
-function _collectSourceConfig(sourceType) {
+function hideBoardPreviewResult() {
+    const previewResult = document.getElementById('board-preview-result');
+    const previewContent = document.getElementById('board-preview-content');
+    if (previewResult) previewResult.style.display = 'none';
+    if (previewContent) previewContent.innerHTML = '';
+}
+
+function setBoardPreviewLoading(message) {
+    const previewResult = document.getElementById('board-preview-result');
+    const previewContent = document.getElementById('board-preview-content');
+    if (!previewResult || !previewContent) return;
+    previewResult.style.display = 'block';
+    previewContent.innerHTML = `<p class="board-preview-empty">${escapeHtml(message)}</p>`;
+}
+
+function renderBoardPreviewResult(data) {
+    const previewResult = document.getElementById('board-preview-result');
+    const previewContent = document.getElementById('board-preview-content');
+    if (!previewResult || !previewContent) return;
+
+    const overview = data?.overview ? renderMarkdownSafe(data.overview) : '<p class="board-preview-empty">暂未返回总览文本。</p>';
+    const statsEntries = Object.entries(data?.source_stats || {});
+    const topNews = Array.isArray(data?.top_news) ? data.top_news : [];
+
+    const statsHtml = statsEntries.length > 0
+        ? statsEntries.map(([label, value]) => `
+            <div class="board-preview-stat">
+                <span class="board-preview-stat__label">${escapeHtml(label)}</span>
+                <span class="board-preview-stat__value">${escapeHtml(value)}</span>
+            </div>
+        `).join('')
+        : '<p class="board-preview-empty">暂无抓取统计。</p>';
+
+    const itemsHtml = topNews.length > 0
+        ? topNews.map((item, index) => {
+            const headline = item?.headline || `未命名内容 ${index + 1}`;
+            const category = item?.category || 'general';
+            const source = item?.source || 'unknown';
+            const points = Array.isArray(item?.key_points) ? item.key_points.filter(Boolean) : [];
+            const tags = Array.isArray(item?.tags) ? item.tags.filter(Boolean) : [];
+            const link = item?.original_link || '';
+            const safeLink = isSafeHttpUrlString(link) ? link : '';
+
+            return `
+                <article class="board-preview-item">
+                    <div class="board-preview-item__head">
+                        <div>
+                            <h5 class="board-preview-item__title">${index + 1}. ${escapeHtml(headline)}</h5>
+                        </div>
+                        <div class="board-preview-item__meta">
+                            <span class="board-preview-pill">${escapeHtml(category)}</span>
+                            <span class="board-preview-pill">${escapeHtml(source)}</span>
+                            ${tags.slice(0, 3).map((tag) => `<span class="board-preview-pill">#${escapeHtml(tag)}</span>`).join('')}
+                        </div>
+                    </div>
+                    ${points.length > 0 ? `<ul class="board-preview-item__points">${points.map((point) => `<li>${escapeHtml(point)}</li>`).join('')}</ul>` : '<p class="board-preview-empty">这条内容没有返回要点摘要。</p>'}
+                    <div class="board-preview-item__footer">
+                        <span class="board-preview-empty">来源链接</span>
+                        ${safeLink ? `<a class="board-preview-link" href="${escapeHtml(safeLink)}" target="_blank" rel="noopener noreferrer">打开原文</a>` : '<span class="board-preview-empty">无可用链接</span>'}
+                    </div>
+                </article>
+            `;
+        }).join('')
+        : '<p class="board-preview-empty">本次试运行没有返回推荐内容。</p>';
+
+    previewResult.style.display = 'block';
+    previewContent.innerHTML = `
+        <section class="board-preview-section">
+            <div class="board-preview-section__title">总览</div>
+            <div class="board-preview-overview">${overview}</div>
+        </section>
+        <section class="board-preview-section">
+            <div class="board-preview-section__title">抓取统计</div>
+            <div class="board-preview-stats">${statsHtml}</div>
+        </section>
+        <section class="board-preview-section">
+            <div class="board-preview-section__title">内容列表 ${topNews.length > 0 ? `(${topNews.length})` : ''}</div>
+            <div class="board-preview-items">${itemsHtml}</div>
+        </section>
+    `;
+}
+
+async function readResponseError(response, fallback = '请求失败') {
+    try {
+        const data = await response.json();
+        return data?.detail || data?.message || fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function _collectSourceConfig(sourceType, { silent = false } = {}) {
     switch (sourceType) {
         case 'rss': {
-            const raw = document.getElementById('board-rss-feeds').value;
-            const feeds = raw.split('\n').map(u => u.trim()).filter(u => u.length > 0);
-            return { feeds };
+            return { feeds: splitBoardLines(document.getElementById('board-rss-feeds').value) };
         }
         case 'pure_llm': {
             const items = parseInt(document.getElementById('board-llm-items').value) || 5;
@@ -623,39 +1385,26 @@ function _collectSourceConfig(sourceType) {
             return { fetch_top_stories: top, min_score: score };
         }
         case 'reddit': {
-            const raw = document.getElementById('board-reddit-subs').value;
-            const subreddits = raw.split('\n').map(line => {
-                const parts = line.trim().split(/\s+/);
-                if (!parts[0]) return null;
-                return {
-                    subreddit: parts[0],
-                    sort: parts[1] || 'hot',
-                    min_score: parseInt(parts[2]) || 10,
-                };
-            }).filter(Boolean);
+            const subreddits = parseBoardRedditSubreddits(document.getElementById('board-reddit-subs').value);
             const comments = parseInt(document.getElementById('board-reddit-comments').value) || 5;
             return { subreddits, fetch_comments: comments };
         }
         case 'github': {
-            const rawRepos = document.getElementById('board-github-repos').value;
-            const repos = rawRepos.split('\n').map(line => {
-                const [owner, repo] = line.trim().split('/');
-                if (!owner || !repo) return null;
-                return { owner, repo };
-            }).filter(Boolean);
-            const rawUsers = document.getElementById('board-github-users').value;
-            const users = rawUsers.split('\n').map(u => u.trim()).filter(Boolean);
+            const { repos } = parseBoardGithubRepos(document.getElementById('board-github-repos').value);
+            const users = splitBoardLines(document.getElementById('board-github-users').value);
             return { repos, users };
         }
         case 'multi': {
             const raw = document.getElementById('board-multi-json').value.trim();
-            try {
-                const parsed = raw ? JSON.parse(raw) : {};
-                return { sources: parsed };
-            } catch {
-                alert('混合数据源 JSON 格式不正确');
+            const parsed = parseBoardJson(raw, '混合数据源配置');
+            if (!parsed.ok) {
+                if (!silent) {
+                    setBoardFormFeedback('error', parsed.error);
+                    document.getElementById('board-multi-json')?.focus();
+                }
                 return null;
             }
+            return { sources: parsed.value || {} };
         }
         default:
             return {};
@@ -664,44 +1413,14 @@ function _collectSourceConfig(sourceType) {
 
 async function saveBoard(event) {
     event.preventDefault();
-    const isEdit = document.getElementById('board-is-edit').value === 'true';
-    const originalSlug = document.getElementById('board-original-slug').value;
-    
-    const slug = document.getElementById('board-slug').value.trim();
-    const name = document.getElementById('board-name').value.trim();
-    const icon = document.getElementById('board-icon').value.trim();
-    const sourceType = document.getElementById('board-source-type').value;
-    const prompt = document.getElementById('board-prompt').value.trim();
-    const promptKey = document.getElementById('board-prompt-key').value;
-    const schedule = document.getElementById('board-schedule').value.trim();
-    const notifyChannels = document.getElementById('board-notify').value.trim();
-    
-    let perspectives = null;
-    const perspectivesRaw = document.getElementById('board-perspectives').value.trim();
-    if (perspectivesRaw) {
-        try {
-            perspectives = JSON.parse(perspectivesRaw);
-        } catch (e) {
-            alert('多视角 (Perspectives) JSON 格式不正确');
-            return;
-        }
+    clearBoardFormFeedback();
+    setBoardActionState({ saving: true });
+    const built = buildBoardFormPayload();
+    if (!built) {
+        setBoardActionState();
+        return;
     }
-    
-    const sourceConfig = _collectSourceConfig(sourceType);
-    if (sourceConfig === null) return; // validation failed
-
-    const payload = {
-        slug: slug,
-        name: name,
-        icon: icon,
-        source_type: sourceType,
-        system_prompt: prompt || null,
-        source_config: sourceConfig,
-        prompt_key: promptKey,
-        schedule: schedule,
-        notify_channels: notifyChannels,
-        perspectives: perspectives
-    };
+    const { isEdit, originalSlug, payload } = built;
     
     try {
         const url = isEdit ? `/api/v1/boards/${originalSlug}` : '/api/v1/boards';
@@ -714,33 +1433,49 @@ async function saveBoard(event) {
         });
         
         if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || '保存失败');
+            throw new Error(await readResponseError(res, '保存失败'));
         }
-        
-        closeBoardModal();
+
+        const savedBoard = await res.json();
+        hideBoardPreviewResult();
         if (!isEdit) {
-            currentBoardSlug = slug; // Switch to new board
-            localStorage.setItem('argos_board', slug);
+            currentBoardSlug = savedBoard.slug; // Switch to new board
+            localStorage.setItem('argos_board', savedBoard.slug);
         }
         await initBoards();
-        if (!isEdit) fetchSummary();
+        if (!isEdit) {
+            fetchSummary();
+        }
+
+        setBoardModalToEditState(savedBoard);
+        applyBoardRecordToForm(savedBoard);
+        resetBoardFormState({ hasSavedVersion: true });
+        renderBoardConfigSummary();
+        setBoardFormFeedback(
+            'success',
+            isEdit
+                ? '板块配置已保存。你可以继续微调，也可以直接试运行当前表单。'
+                : '板块已创建并保存。现在可以继续微调，或直接试运行当前表单。'
+        );
     } catch (e) {
-        alert("保存板块出错: " + e.message);
+        setBoardFormFeedback('error', `保存板块出错：${e.message}`);
+    } finally {
+        setBoardActionState();
     }
 }
 
 async function deleteBoard() {
     const slug = document.getElementById('board-original-slug').value;
     if (!confirm('确定要删除此板块吗？归档记录也会一起清理。')) return;
+    clearBoardFormFeedback();
+    setBoardActionState({ deleting: true });
     
     try {
         const res = await fetch(`/api/v1/boards/${slug}`, {
             method: 'DELETE'
         });
         if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || '删除失败');
+            throw new Error(await readResponseError(res, '删除失败'));
         }
         
         closeBoardModal();
@@ -749,48 +1484,42 @@ async function deleteBoard() {
         await initBoards();
         fetchSummary();
     } catch (e) {
-        alert("删除板块出错: " + e.message);
+        setBoardFormFeedback('error', `删除板块出错：${e.message}`);
+    } finally {
+        setBoardActionState();
     }
 }
 
 async function previewBoard() {
-    const slug = document.getElementById('board-original-slug').value;
-    if (!slug) return;
-    
-    const previewBtn = document.getElementById('board-preview-btn');
-    const previewResult = document.getElementById('board-preview-result');
-    const previewContent = document.getElementById('board-preview-content');
-    
-    previewBtn.disabled = true;
-    previewBtn.textContent = '运行中...';
-    previewResult.style.display = 'block';
-    previewContent.textContent = '正在执行抓取与 LLM 分析...\n这可能需要一分钟时间，请稍候。';
+    clearBoardFormFeedback();
+    const built = buildBoardFormPayload({ forPreview: true });
+    if (!built) {
+        return;
+    }
+
+    if (built.meta.placeholderFields.length > 0) {
+        setBoardFormFeedback('info', `本次试运行会为 ${built.meta.placeholderFields.join('、')} 使用临时占位值，仅用于预览当前效果。`);
+    }
+
+    setBoardActionState({ previewing: true });
+    setBoardPreviewLoading('正在执行抓取与 LLM 分析（基于当前表单配置）... 这可能需要几十秒。');
     
     try {
-        const res = await fetch(`/api/v1/boards/${slug}/preview`, { method: 'POST' });
+        const res = await fetch('/api/v1/boards/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(built.payload)
+        });
         if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || '预览失败');
+            throw new Error(await readResponseError(res, '预览失败'));
         }
         const data = await res.json();
-        
-        let out = `【总览】\n${data.overview}\n\n`;
-        out += `【抓取统计】\n${JSON.stringify(data.source_stats || {}, null, 2)}\n\n`;
-        if (data.top_news && data.top_news.length > 0) {
-            out += `【内容列表 (${data.top_news.length} 条)】\n`;
-            data.top_news.forEach((n, i) => {
-                out += `${i + 1}. ${n.headline} [${n.category}]\n`;
-                if (n.key_points) {
-                    n.key_points.forEach(k => out += `   - ${k}\n`);
-                }
-            });
-        }
-        previewContent.textContent = out;
+        renderBoardPreviewResult(data || {});
     } catch (e) {
-        previewContent.textContent = `❌ 预览出错: ${e.message}`;
+        setBoardFormFeedback('error', `试运行失败：${e.message}`);
+        setBoardPreviewLoading(`试运行失败：${e.message}`);
     } finally {
-        previewBtn.disabled = false;
-        previewBtn.textContent = '试运行 (Preview)';
+        setBoardActionState();
     }
 }
 
@@ -1157,18 +1886,31 @@ function renderSourceStats(stats) {
 }
 
 function openRefreshModal() {
-    document.getElementById('refresh-modal').classList.add('active');
-    document.getElementById('refresh-preference').value = '';
-    document.getElementById('save-preference-chk').checked = false;
+    const modal = document.getElementById('refresh-modal');
+    if (!modal) return;
+    openOverlay(modal, '#refresh-preference');
+
+    const preferenceInput = _getRefreshPreferenceInput();
+    if (preferenceInput) {
+        preferenceInput.value = '';
+    }
+
+    const savePersonaCheckbox = _getRefreshSavePersonaCheckbox();
+    if (savePersonaCheckbox) {
+        savePersonaCheckbox.checked = false;
+    }
 }
 
 function closeRefreshModal() {
-    document.getElementById('refresh-modal').classList.remove('active');
+    const modal = document.getElementById('refresh-modal');
+    closeOverlay(modal);
 }
 
 function confirmForceRefresh() {
-    const preference = document.getElementById('refresh-preference').value.trim();
-    const saveIt = document.getElementById('save-preference-chk').checked;
+    const preferenceInput = _getRefreshPreferenceInput();
+    const savePersonaCheckbox = _getRefreshSavePersonaCheckbox();
+    const preference = preferenceInput ? preferenceInput.value.trim() : '';
+    const saveIt = !!(savePersonaCheckbox && savePersonaCheckbox.checked);
     closeRefreshModal();
 
     // Clear cache so force refresh shows loading state
@@ -1186,10 +1928,21 @@ function confirmForceRefresh() {
     fetchSummaryWithUrl(url);
 }
 
+function submitRefresh() {
+    confirmForceRefresh();
+}
+
+function _getRefreshPreferenceInput() {
+    return document.getElementById('refresh-preference') || document.getElementById('refresh-prompt');
+}
+
+function _getRefreshSavePersonaCheckbox() {
+    return document.getElementById('save-preference-chk') || document.getElementById('refresh-save-persona');
+}
+
 function togglePersonaPanel() {
     const panel = document.getElementById('persona-panel');
-    panel.classList.toggle('active');
-    if (panel.classList.contains('active')) {
+    if (toggleOverlay(panel, '#pref-input-focus_topic')) {
         loadPersonaData();
         loadExplicitPreferences();
     }
@@ -1568,16 +2321,14 @@ async function triggerWeeklyInsight() {
 
 function toggleHistoryPanel() {
     const panel = document.getElementById('history-modal');
-    panel.classList.toggle('active');
-    if (panel.classList.contains('active')) {
+    if (toggleOverlay(panel, '#history-unread-only')) {
         loadHistoryData('history');
     }
 }
 
 function toggleMagazinePanel() {
     const panel = document.getElementById('magazine-modal');
-    panel.classList.toggle('active');
-    if (panel.classList.contains('active')) {
+    if (toggleOverlay(panel, '#gen-weekly-btn')) {
         loadHistoryData('magazine');
     }
 }
@@ -1777,8 +2528,7 @@ async function openRagPanel(url, headline) {
 
     clearElement(messages);
     document.getElementById('rag-article-title').textContent = headline;
-    document.getElementById('rag-overlay').classList.add('visible');
-    document.getElementById('rag-panel').classList.add('open');
+    openRagOverlay('#rag-close-btn');
     input.disabled = true;
 
     try {
@@ -1936,8 +2686,7 @@ async function openRagPanel(url, headline) {
 }
 
 function closeRagPanel() {
-    document.getElementById('rag-panel').classList.remove('open');
-    document.getElementById('rag-overlay').classList.remove('visible');
+    closeRagOverlay();
     if (currentQueryController) {
         currentQueryController.abort();
         currentQueryController = null;
@@ -2271,9 +3020,9 @@ function scrollRagMessagesToBottom() {
 
 function toggleInsightsPanel() {
     const modal = document.getElementById('insights-modal');
-    const isOpen = modal.style.display === 'flex';
-    modal.style.display = isOpen ? 'none' : 'flex';
-    if (!isOpen) fetchHeatmap();
+    if (toggleOverlay(modal, '#heatmap-days')) {
+        fetchHeatmap();
+    }
 }
 
 async function fetchHeatmap() {
@@ -2417,9 +3166,7 @@ async function deletePrefTag(id) {
 
 function toggleInsightsPanel() {
     const modal = document.getElementById('insights-modal');
-    if (!modal) return;
-    modal.classList.toggle('active');
-    if (modal.classList.contains('active')) {
+    if (toggleOverlay(modal, '#heatmap-days')) {
         fetchHeatmap();
     }
 }
@@ -2610,7 +3357,7 @@ function renderEntityTimeline(data, container) {
 function toggleStatsPanel() {
     const modal = document.getElementById('stats-modal');
     if (!modal) return;
-    modal.classList.toggle('active');
+    toggleOverlay(modal, '.metrics-refresh-btn');
 }
 
 // Sources Management Panel
@@ -2619,8 +3366,7 @@ function toggleStatsPanel() {
 function toggleSourcesPanel() {
     const modal = document.getElementById('sources-modal');
     if (!modal) return;
-    modal.classList.toggle('active');
-    if (modal.classList.contains('active')) {
+    if (toggleOverlay(modal, '#new-source-url')) {
         loadSourcesForCurrentBoard();
     }
 }
@@ -2867,8 +3613,7 @@ async function _refreshCatchupBadge() {
 
 function toggleCatchupPanel() {
     const panel = document.getElementById('catchup-modal');
-    panel.classList.toggle('active');
-    if (panel.classList.contains('active')) {
+    if (toggleOverlay(panel, '#catchup-gen-btn')) {
         _loadCatchupStatus();
     }
 }
@@ -2988,4 +3733,3 @@ function filterHistoryByViewed() {
         }
     });
 }
-
