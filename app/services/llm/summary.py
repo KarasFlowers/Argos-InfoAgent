@@ -383,6 +383,7 @@ class SummaryMixin:
         session: AsyncSession | None = None,
         board=None,
         perspectives: list[str] | None = None,
+        seed_summary: DailySummaryResponse | None = None,
     ) -> list[tuple[DailySummaryResponse | None, dict[str, str]]]:
         """
         Generate summaries for multiple perspectives from the same content items.
@@ -401,14 +402,17 @@ class SummaryMixin:
 
         import asyncio
 
-        # Run the shared pipeline once to get scored articles
-        # We reuse the full pipeline by calling generate_daily_summary_from_items
-        # for the first perspective, then re-use the scored articles for the rest.
-        first_result, fallback = await self.generate_daily_summary_from_items(
-            content_items, session=session, board=board
-        )
-        if not first_result:
-            return [(None, {})]
+        if seed_summary is not None:
+            first_result, fallback = seed_summary, {}
+        else:
+            # Run the shared pipeline once to get scored articles
+            # We reuse the full pipeline by calling generate_daily_summary_from_items
+            # for the first perspective, then re-use the scored articles for the rest.
+            first_result, fallback = await self.generate_daily_summary_from_items(
+                content_items, session=session, board=board
+            )
+            if not first_result:
+                return [(None, {})]
 
         # For additional perspectives, re-call LLM with different prompt
         results = [(first_result, fallback)]
