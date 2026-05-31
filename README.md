@@ -6,31 +6,51 @@
 
 **[English](README.md) | [Chinese](README_zh.md)**
 
-> An intelligent daily tech briefing assistant powered by LLM and RAG.
+> An intelligent daily tech briefing assistant powered by LLM and RAG — with multi-board management, article-level RAG Q&A, deep research, and MCP integration.
 
-Argos is a FastAPI-based daily tech briefing application that aggregates content from multiple sources (RSS, Hacker News, Reddit, GitHub, or pure LLM), uses any OpenAI-compatible LLM to curate structured summaries, and provides article-level RAG chat with feedback-driven personalization.
+Argos is a FastAPI-based daily tech briefing application that aggregates content from multiple sources (RSS, Hacker News, Reddit, GitHub, or pure LLM), uses any OpenAI-compatible LLM to curate structured summaries, and provides article-level RAG chat with feedback-driven personalization. Each board runs independently with its own sources, prompts, persona, and notification channels.
 
-## Features
+## ✨ Highlight Features
 
-- **Multi-source aggregation** - RSS feeds, Hacker News top stories, Reddit posts, GitHub events/releases, or pure-LLM generated content
-- **Board system** - Create custom sections (boards) each with its own source type, system prompt, persona, schedule, and notification channels
-- **Board Wizard** - AI-guided interactive wizard to configure new boards
-- **Multi-model LLM routing** - Separate "fast" and "smart" tiers with CircuitBreaker for resilient LLM calls
-- **LLM-driven daily briefing** - Structured summaries with categories, key points, tags, and topic paths
-- **Daily report refinement** - Iteratively refine an existing briefing with natural-language instructions
-- **Article Q&A via RAG** - Hybrid retrieval (Bi-Encoder + BM25) with Cross-Encoder reranking, HyDE query rewriting, and cross-article search
-- **Deep research** - Decompose a question into sub-queries, search RAG + web, then synthesize a structured report
-- **Weekly reports & insights** - Topic tree, trending analysis, heatmap, entity timeline, and editorial weekly summary
-- **Content clustering** - Bi-Encoder + Jaccard fallback grouping of related articles into events
-- **Rule-based filtering** - Blacklist keywords/patterns with admin review and restore workflow
-- **Source health monitoring** - Track RSS/API source health status with error logging
-- **Personalized recommendations** - Explicit like/dislike feedback + auto-extracted interests for tailored content
-- **User memory system** - Persistent factual memory (preferences, context) for prompt enrichment
-- **Cross-source deduplication** - URL normalization + AI semantic deduplication
-- **Multi-channel notifications** - Push briefings via email, webhook, Bark (iOS), or Telegram
-- **MCP Server** - Expose all capabilities to AI assistants via Model Context Protocol
-- **URL safety validation** - Block private/internal URLs to prevent SSRF
-- **Local persistence** - SQLite, ChromaDB, and Redis cache for offline-first design
+### 🧩 Board System
+
+Create custom sections (boards) — each with its own source type, system prompt, persona, schedule, and notification channels. The AI-guided **Board Wizard** helps you configure new boards in seconds.
+
+### 🔍 Article-Level RAG
+
+Hybrid retrieval pipeline combining Bi-Encoder + BM25 with **Cross-Encoder reranking** and **HyDE query rewriting**. Supports both single-article and **cross-article** Q&A over all ingested content.
+
+### 🔬 Deep Research
+
+Decompose a complex question into sub-queries, search RAG + web sources, then synthesize a structured research report — all in one click.
+
+### 🤖 MCP Server
+
+Expose all capabilities to AI assistants (Claude, Cursor, Windsurf, etc.) via the [Model Context Protocol](https://modelcontextprotocol.io/) — 14 tools for briefings, RAG, research, and preferences.
+
+### 🎯 Personalized Recommendations
+
+Explicit like/dislike feedback + auto-extracted interests + **user memory system** (persistent preferences and context). The more you use it, the better it knows you.
+
+### 📢 Multi-Channel Notifications
+
+Push daily briefings via **email, Webhook, Bark (iOS), or Telegram** — automatically on schedule or on demand.
+
+---
+
+## More Features
+
+- **Multi-source aggregation** — RSS, Hacker News, Reddit, GitHub, or pure-LLM generated content
+- **Multi-model LLM routing** — Separate "fast" and "smart" tiers with CircuitBreaker for resilient calls
+- **LLM-driven daily briefing** — Structured summaries with categories, key points, tags, and topic paths
+- **Daily report refinement** — Iteratively refine an existing briefing with natural-language instructions
+- **Weekly reports & insights** — Topic tree, trending analysis, heatmap, entity timeline, and editorial weekly summary
+- **Content clustering** — Bi-Encoder + Jaccard fallback grouping of related articles into events
+- **Rule-based filtering** — Blacklist keywords/patterns with admin review and restore workflow
+- **Source health monitoring** — Track RSS/API source health status with error logging
+- **Cross-source deduplication** — URL normalization + AI semantic deduplication
+- **URL safety validation** — Block private/internal URLs to prevent SSRF
+- **Local persistence** — SQLite, ChromaDB, and Redis cache for offline-first design
 
 ## Demo
 
