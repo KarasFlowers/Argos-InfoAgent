@@ -30,6 +30,7 @@ const OVERLAY_DIALOG_LABELS = {
     'refresh-modal': '重新调教简报',
     'stats-modal': '数据统计',
     'board-modal': '板块管理',
+    'saved-modal': '我的收藏',
     'rag-panel': '深度追问'
 };
 
@@ -37,8 +38,13 @@ const ICONS = {
     external: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>',
     ask: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
     like: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>',
-    dislike: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"/></svg>'
+    dislike: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"/></svg>',
+    favorite: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    readLater: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
 };
+
+// url -> Set of saved statuses ("favorite" | "read_later")
+let savedStatusMap = {};
 
 document.addEventListener('DOMContentLoaded', async () => {
     _initTheme();
@@ -57,6 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupRagPanel();
     setupHistoryPanel();
     _refreshCatchupBadge();
+    loadSavedState();
 
     await initBoards();
     fetchSummary();
@@ -230,6 +237,7 @@ function handleOverlayEscape(event) {
 
 function dismissTopOverlay() {
     const dismissOrder = [
+        ['saved-modal', toggleSavedPanel],
         ['board-modal', closeBoardModal],
         ['refresh-modal', closeRefreshModal],
         ['stats-modal', toggleStatsPanel],
@@ -491,7 +499,7 @@ const PRESET_TEMPLATES = {
     python_dev: {
         slug: 'python-dev',
         name: 'Python 开发',
-        icon: '🐍',
+        icon: '❖',
         source_type: 'github',
         source_config: { repos: [{owner: 'python', repo: 'cpython'}, {owner: 'pallets', repo: 'flask'}] },
         system_prompt: '你是一个资深的 Python 开发者，请帮我总结这些 Python 相关的最新动态。'
@@ -499,7 +507,7 @@ const PRESET_TEMPLATES = {
     ai_research: {
         slug: 'ai-research',
         name: 'AI 研究',
-        icon: '🤖',
+        icon: '❖',
         source_type: 'hackernews',
         source_config: { fetch_top_stories: 40, min_score: 150 },
         system_prompt: '请从 HN 热帖中筛选出与 AI、大模型、机器学习相关的论文和项目进行总结。'
@@ -507,7 +515,7 @@ const PRESET_TEMPLATES = {
     indie_hacker: {
         slug: 'indie-hacker',
         name: '独立开发者',
-        icon: '💻',
+        icon: '❖',
         source_type: 'reddit',
         source_config: { subreddits: [{subreddit: 'SaaS', sort: 'hot', min_score: 50}], fetch_comments: 10 },
         system_prompt: '关注独立开发、SaaS、产品营销相关的讨论，总结出有价值的商业洞察。'
@@ -602,6 +610,7 @@ function captureBoardFormFingerprint() {
             multiJson: getBoardFieldValue('board-multi-json').trim(),
         },
         promptKey: getBoardFieldValue('board-prompt-key', 'daily_briefing').trim(),
+        outputLanguage: getBoardFieldValue('board-output-language', 'auto').trim(),
         prompt: getBoardFieldValue('board-prompt').trim(),
         schedule: getBoardFieldValue('board-schedule').trim(),
         notifyChannels: getBoardFieldValue('board-notify').trim(),
@@ -742,12 +751,14 @@ function buildBoardFormPayload({ forPreview = false } = {}) {
     const placeholderFields = [];
     const slug = slugRaw || (forPreview ? (originalSlug || 'preview-board') : slugRaw);
     const name = nameRaw || (forPreview ? '预览板块' : nameRaw);
-    const icon = iconRaw || '📌';
+    const icon = iconRaw || '❖';
 
     if (forPreview) {
         if (!slugRaw) placeholderFields.push('标识符');
         if (!nameRaw) placeholderFields.push('显示名称');
     }
+
+    const outputLanguage = getBoardFieldValue('board-output-language', 'auto').trim();
 
     const payload = {
         slug,
@@ -757,6 +768,7 @@ function buildBoardFormPayload({ forPreview = false } = {}) {
         system_prompt: prompt || null,
         source_config: sourceConfig,
         prompt_key: promptKey,
+        output_language: outputLanguage,
         schedule,
         notify_channels: notifyChannels,
         perspectives,
@@ -804,10 +816,11 @@ function applyBoardRecordToForm(board) {
     if (!board) return;
     document.getElementById('board-slug').value = board.slug || '';
     document.getElementById('board-name').value = board.name || '';
-    document.getElementById('board-icon').value = board.icon || '📌';
+    document.getElementById('board-icon').value = board.icon || '❖';
     document.getElementById('board-source-type').value = board.source_type || 'rss';
     document.getElementById('board-prompt').value = board.system_prompt || '';
     document.getElementById('board-prompt-key').value = board.prompt_key || 'daily_briefing';
+    document.getElementById('board-output-language').value = board.output_language || 'auto';
     document.getElementById('board-schedule').value = board.schedule || '';
     document.getElementById('board-notify').value = board.notify_channels || '';
 
@@ -963,6 +976,11 @@ function renderBoardConfigSummary() {
     if (scheduleRaw) {
         checklist.push(`已设置单独调度：${scheduleRaw}。`);
     }
+    const outputLang = document.getElementById('board-output-language')?.value || 'auto';
+    if (outputLang !== 'auto') {
+        const langLabel = outputLang === 'zh' ? '中文' : outputLang === 'en' ? 'English' : outputLang;
+        checklist.push(`输出语言：${langLabel}。`);
+    }
     if (notifyChannels.length > 0) {
         checklist.push(`通知渠道：${notifyChannels.join('、')}。`);
     }
@@ -1028,7 +1046,7 @@ function resetWizard() {
     wizardIsLoading = false;
     const messagesDiv = document.getElementById('wizard-messages');
     if (messagesDiv) {
-        messagesDiv.innerHTML = `<div class="wizard-msg wizard-msg--ai">👋 告诉我你想要一个什么样的板块，比如：<br>"我想每天学 5 个英语商务单词"，<br>"汇总国内外顶级 AI 实验室的最新论文"，<br>"每天给我一条冷门心理学知识"...</div>`;
+        messagesDiv.innerHTML = `<div class="wizard-msg wizard-msg--ai">告诉我你想要一个什么样的板块，比如：<br>"我想每天学 5 个英语商务单词"，<br>"汇总国内外顶级 AI 实验室的最新论文"，<br>"每天给我一条冷门心理学知识"...</div>`;
     }
     const applyRow = document.getElementById('wizard-apply-row');
     if (applyRow) applyRow.style.display = 'none';
@@ -1132,7 +1150,7 @@ function applyWizardConfig() {
     document.getElementById('board-slug').value = cfg.slug || '';
     document.getElementById('board-slug').disabled = false;
     document.getElementById('board-name').value = cfg.name || '';
-    document.getElementById('board-icon').value = cfg.icon || '📌';
+    document.getElementById('board-icon').value = cfg.icon || '❖';
     document.getElementById('board-source-type').value = cfg.source_type || 'rss';
     document.getElementById('board-prompt').value = cfg.system_prompt || '';
     
@@ -1794,6 +1812,29 @@ function createNewsCard(newsItem, index) {
     feedbackContainer.appendChild(likeButton);
     feedbackContainer.appendChild(dislikeButton);
 
+    const statuses = savedStatusMap[newsItem.original_link] || [];
+
+    const favoriteButton = document.createElement('button');
+    favoriteButton.type = 'button';
+    favoriteButton.className = 'feedback-btn favorite';
+    favoriteButton.title = '收藏';
+    favoriteButton.disabled = !safeLink;
+    favoriteButton.innerHTML = ICONS.favorite;
+    favoriteButton.classList.toggle('active', statuses.includes('favorite'));
+    favoriteButton.addEventListener('click', () => toggleSaved(favoriteButton, newsItem, 'favorite'));
+
+    const readLaterButton = document.createElement('button');
+    readLaterButton.type = 'button';
+    readLaterButton.className = 'feedback-btn read-later';
+    readLaterButton.title = '稍后阅读';
+    readLaterButton.disabled = !safeLink;
+    readLaterButton.innerHTML = ICONS.readLater;
+    readLaterButton.classList.toggle('active', statuses.includes('read_later'));
+    readLaterButton.addEventListener('click', () => toggleSaved(readLaterButton, newsItem, 'read_later'));
+
+    feedbackContainer.appendChild(favoriteButton);
+    feedbackContainer.appendChild(readLaterButton);
+
     const askButton = document.createElement('button');
     askButton.type = 'button';
     askButton.className = 'ask-btn';
@@ -1945,6 +1986,7 @@ function togglePersonaPanel() {
     if (toggleOverlay(panel, '#pref-input-focus_topic')) {
         loadPersonaData();
         loadExplicitPreferences();
+        loadPrefSuggestions();
     }
 }
 
@@ -2097,6 +2139,186 @@ async function sendFeedback(buttonElement, url, sentiment, newsItem) {
     }
 }
 
+// ==========================================
+// Saved Articles (Favorites / Read Later)
+// ==========================================
+
+async function loadSavedState() {
+    try {
+        const res = await fetch('/api/v1/saved/urls');
+        if (res.ok) {
+            savedStatusMap = await res.json() || {};
+        }
+    } catch (e) {
+        console.error('Failed to load saved state', e);
+    }
+}
+
+async function toggleSaved(buttonElement, newsItem, status) {
+    const url = newsItem.original_link;
+    if (!isSafeHttpUrlString(url)) return;
+
+    const statuses = savedStatusMap[url] || [];
+    const isActive = statuses.includes(status);
+    const nextActive = !isActive;
+
+    // Optimistic UI update
+    buttonElement.classList.toggle('active', nextActive);
+    buttonElement.disabled = true;
+
+    try {
+        if (nextActive) {
+            const res = await fetch('/api/v1/saved', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url,
+                    status,
+                    headline: newsItem.headline || '',
+                    source: newsItem.source || '',
+                    category: newsItem.category || '',
+                    board: currentBoardSlug || '',
+                })
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            savedStatusMap[url] = Array.from(new Set([...statuses, status]));
+        } else {
+            const res = await fetch('/api/v1/saved', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, status })
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            savedStatusMap[url] = statuses.filter((s) => s !== status);
+            if (savedStatusMap[url].length === 0) delete savedStatusMap[url];
+        }
+    } catch (error) {
+        console.error('Failed to toggle saved state:', error);
+        buttonElement.classList.toggle('active', isActive);  // revert
+    } finally {
+        buttonElement.disabled = false;
+    }
+}
+
+let currentSavedTab = 'favorite';
+
+function toggleSavedPanel() {
+    const panel = document.getElementById('saved-modal');
+    if (toggleOverlay(panel)) {
+        switchSavedTab(currentSavedTab);
+    }
+}
+
+function switchSavedTab(status) {
+    currentSavedTab = status;
+    document.querySelectorAll('.saved-tab').forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.status === status);
+    });
+    renderSavedList(status);
+}
+
+async function renderSavedList(status) {
+    const container = document.getElementById('saved-list');
+    if (!container) return;
+    clearElement(container);
+
+    const loading = document.createElement('p');
+    loading.className = 'saved-placeholder';
+    loading.textContent = '正在加载...';
+    container.appendChild(loading);
+
+    let items = [];
+    try {
+        const res = await fetch(`/api/v1/saved?status=${encodeURIComponent(status)}`);
+        if (res.ok) {
+            const data = await res.json();
+            items = data.items || [];
+        }
+    } catch (e) {
+        console.error('Failed to load saved list', e);
+    }
+
+    clearElement(container);
+
+    if (items.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'saved-placeholder';
+        empty.textContent = status === 'favorite' ? '还没有收藏任何资讯。' : '还没有标记任何稍后阅读的资讯。';
+        container.appendChild(empty);
+        return;
+    }
+
+    items.forEach((item) => {
+        const safeLink = isSafeHttpUrlString(item.url);
+        const row = document.createElement('div');
+        row.className = 'saved-item';
+
+        const main = document.createElement('div');
+        main.className = 'saved-item__main';
+
+        const titleEl = document.createElement(safeLink ? 'a' : 'span');
+        titleEl.className = 'saved-item__title';
+        titleEl.textContent = item.headline || item.url;
+        if (safeLink) {
+            titleEl.href = item.url;
+            titleEl.target = '_blank';
+            titleEl.rel = 'noopener noreferrer';
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'saved-item__meta';
+        const metaParts = [];
+        if (item.source) metaParts.push(item.source);
+        if (item.category) metaParts.push(item.category);
+        meta.textContent = metaParts.join(' · ');
+
+        main.appendChild(titleEl);
+        main.appendChild(meta);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'saved-item__remove';
+        removeBtn.title = '移除';
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/v1/saved', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: item.url, status })
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const remaining = (savedStatusMap[item.url] || []).filter((s) => s !== status);
+                if (remaining.length === 0) delete savedStatusMap[item.url];
+                else savedStatusMap[item.url] = remaining;
+                row.remove();
+                if (!container.querySelector('.saved-item')) {
+                    renderSavedList(status);
+                }
+                // Refresh any visible cards' button state
+                _syncSavedButtonsForUrl(item.url, status, false);
+            } catch (e) {
+                console.error('Failed to remove saved item', e);
+            }
+        });
+
+        row.appendChild(main);
+        row.appendChild(removeBtn);
+        container.appendChild(row);
+    });
+}
+
+function _syncSavedButtonsForUrl(url, status, active) {
+    const cls = status === 'favorite' ? '.feedback-btn.favorite' : '.feedback-btn.read-later';
+    document.querySelectorAll('.news-card').forEach((card) => {
+        const link = card.querySelector('.read-more');
+        if (link && link.href === url) {
+            const btn = card.querySelector(cls);
+            if (btn) btn.classList.toggle('active', active);
+        }
+    });
+}
+
 async function showInterestReasonPopup(anchorButton, newsItem) {
     // Remove any existing popup
     document.querySelectorAll('.interest-popup').forEach((el) => el.remove());
@@ -2170,7 +2392,7 @@ async function showInterestReasonPopup(anchorButton, newsItem) {
                 clearTimeout(dismissTimer);
                 popup.classList.add('saved');
                 popup.querySelector('.interest-popup__options').innerHTML =
-                    `<div class="interest-popup__success">✅ 已添加：<strong>${opt}</strong></div>`;
+                    `<div class="interest-popup__success"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> 已添加：<strong>${opt}</strong></div>`;
                 setTimeout(() => popup.remove(), 1500);
             } catch (error) {
                 console.error('Failed to save interest reason:', error);
@@ -2263,7 +2485,7 @@ async function triggerWeeklyInsight() {
 
     genBtn.style.opacity = '0.5';
     genBtn.disabled = true;
-    genBtn.textContent = '⚡ 深度复盘中...';
+    genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 深度复盘中...';
     
     clearElement(content);
     loadingMsg.className = 'generating-text';
@@ -2310,7 +2532,7 @@ async function triggerWeeklyInsight() {
         clearElement(content);
         genBtn.style.opacity = '1';
         genBtn.disabled = false;
-        genBtn.textContent = '⚡ 生成本周深读 (Wired Style)';
+        genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 生成本周深读 (Wired Style)';
         
         const err = document.createElement('p');
         err.className = 'error-message';
@@ -3106,6 +3328,8 @@ function renderTimeline(data, container) {
 // Explicit Preference Tags
 // ---------------------------------------------------------------
 
+let _prefSuggestionData = { sources: [], topics: [] };
+
 async function loadExplicitPreferences() {
     try {
         let url = '/api/v1/preferences';
@@ -3115,6 +3339,7 @@ async function loadExplicitPreferences() {
         for (const cat of ['focus_topic', 'block_topic', 'prefer_source', 'avoid_source']) {
             renderPrefTags(cat, data[cat] || []);
         }
+        _refreshAllSuggestions();
     } catch (e) {
         console.error('Failed to load preferences', e);
     }
@@ -3158,6 +3383,79 @@ async function deletePrefTag(id) {
     } catch (e) {
         console.error('Failed to delete preference', e);
     }
+}
+
+async function loadPrefSuggestions() {
+    // Source suggestions: all enabled sources from DB + any extra names seen in today's data
+    try {
+        const res = await fetch('/api/v1/admin/sources/health');
+        const rows = await res.json();
+        const dbNames = rows.filter(r => r.enabled).map(r => r.name).filter(Boolean);
+        const todayNames = latestData
+            ? Object.keys(latestData.source_stats || computeSourceStats(latestData.top_news || []))
+            : [];
+        const merged = Array.from(new Set([...dbNames, ...todayNames])).sort();
+        _prefSuggestionData.sources = merged;
+    } catch (e) {
+        console.error('Failed to load source list', e);
+        if (latestData) {
+            const stats = latestData.source_stats || computeSourceStats(latestData.top_news || []);
+            _prefSuggestionData.sources = Object.keys(stats).sort();
+        }
+    }
+
+    // Topic suggestions: fetch from trending API
+    try {
+        let url = '/api/v1/insights/trending?top_n=15';
+        if (currentBoardSlug) url += `&board=${encodeURIComponent(currentBoardSlug)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        _prefSuggestionData.topics = (data.trending || []).map(t => t.topic).filter(Boolean);
+    } catch (e) {
+        console.error('Failed to load trending topics for suggestions', e);
+    }
+
+    _refreshAllSuggestions();
+}
+
+function _refreshAllSuggestions() {
+    _renderSuggestions('focus_topic',  _prefSuggestionData.topics);
+    _renderSuggestions('block_topic',  _prefSuggestionData.topics);
+    _renderSuggestions('prefer_source', _prefSuggestionData.sources);
+    _renderSuggestions('avoid_source',  _prefSuggestionData.sources);
+}
+
+function _getExistingPrefValues(category) {
+    const container = document.getElementById(`pref-tags-${category}`);
+    if (!container) return new Set();
+    return new Set(
+        Array.from(container.querySelectorAll('.pref-tag')).map(el =>
+            el.textContent.replace(/×$/, '').trim()
+        )
+    );
+}
+
+function _renderSuggestions(category, allItems) {
+    const container = document.getElementById(`pref-suggestions-${category}`);
+    if (!container) return;
+    const existing = _getExistingPrefValues(category);
+    const filtered = allItems.filter(item => !existing.has(item)).slice(0, 8);
+    if (filtered.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    const label = '<span class="pref-suggestion-label">快速添加</span>';
+    const chips = filtered.map(item => {
+        const escaped = item.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `<button class="pref-suggestion-chip" onclick="quickAddPref('${category}','${escaped}')">${item}</button>`;
+    }).join('');
+    container.innerHTML = label + chips;
+}
+
+async function quickAddPref(category, content) {
+    const input = document.getElementById(`pref-input-${category}`);
+    if (input) input.value = content;
+    await addPrefTag(category);
 }
 
 // ==========================================
@@ -3635,7 +3933,7 @@ async function _loadCatchupStatus() {
         const total = unviewed + gaps;
 
         if (total === 0) {
-            statusEl.innerHTML = '<p class="catchup-placeholder">所有内容都已阅读，无需补读 ✅</p>';
+            statusEl.innerHTML = '<p class="catchup-placeholder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> 所有内容都已阅读，无需补读</p>';
             if (genBtn) genBtn.style.display = 'none';
         } else {
             let msg = '';

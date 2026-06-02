@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/index.css?v=14">
+    <link rel="stylesheet" href="/static/index.css?v=16">
     <script>
         // Apply theme before first paint to avoid flash of dark background
         try {
@@ -54,6 +54,10 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                     信息源
                 </button>
+                <button id="saved-btn" class="back-btn" onclick="toggleSavedPanel()" title="我的收藏/稍后阅读">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+                    收藏
+                </button>
                 <button id="stats-btn" class="back-btn" onclick="toggleStatsPanel()" title="查看数据统计">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
                     统计
@@ -93,6 +97,7 @@
                             <div class="pref-group" data-cat="focus_topic">
                                 <label class="pref-label pref-focus">关注话题</label>
                                 <div class="pref-tags" id="pref-tags-focus_topic"></div>
+                                <div class="pref-suggestions" id="pref-suggestions-focus_topic"></div>
                                 <div class="pref-add-row">
                                     <input type="text" placeholder="添加话题…" id="pref-input-focus_topic" onkeydown="if(event.key==='Enter') addPrefTag('focus_topic')">
                                     <button onclick="addPrefTag('focus_topic')">+</button>
@@ -101,6 +106,7 @@
                             <div class="pref-group" data-cat="block_topic">
                                 <label class="pref-label pref-block">屏蔽话题</label>
                                 <div class="pref-tags" id="pref-tags-block_topic"></div>
+                                <div class="pref-suggestions" id="pref-suggestions-block_topic"></div>
                                 <div class="pref-add-row">
                                     <input type="text" placeholder="添加话题…" id="pref-input-block_topic" onkeydown="if(event.key==='Enter') addPrefTag('block_topic')">
                                     <button onclick="addPrefTag('block_topic')">+</button>
@@ -109,6 +115,7 @@
                             <div class="pref-group" data-cat="prefer_source">
                                 <label class="pref-label pref-prefer">优先来源</label>
                                 <div class="pref-tags" id="pref-tags-prefer_source"></div>
+                                <div class="pref-suggestions" id="pref-suggestions-prefer_source"></div>
                                 <div class="pref-add-row">
                                     <input type="text" placeholder="添加来源…" id="pref-input-prefer_source" onkeydown="if(event.key==='Enter') addPrefTag('prefer_source')">
                                     <button onclick="addPrefTag('prefer_source')">+</button>
@@ -117,6 +124,7 @@
                             <div class="pref-group" data-cat="avoid_source">
                                 <label class="pref-label pref-avoid">降权来源</label>
                                 <div class="pref-tags" id="pref-tags-avoid_source"></div>
+                                <div class="pref-suggestions" id="pref-suggestions-avoid_source"></div>
                                 <div class="pref-add-row">
                                     <input type="text" placeholder="添加来源…" id="pref-input-avoid_source" onkeydown="if(event.key==='Enter') addPrefTag('avoid_source')">
                                     <button onclick="addPrefTag('avoid_source')">+</button>
@@ -192,7 +200,7 @@
                     <div id="magazine-recap-stats"></div>
                     <div class="magazine-action-bar">
                         <button id="gen-weekly-btn" class="magazine-gen-btn" onclick="triggerWeeklyInsight()">
-                            ⚡ 生成本周深读 (Wired Style)
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 生成本周深读 (Wired Style)
                         </button>
                     </div>
                     <div id="weekly-insight-content" class="weekly-insight-content">
@@ -301,7 +309,7 @@
     <aside id="rag-panel" class="rag-panel">
         <div class="rag-panel__header">
             <div class="rag-panel__title-group">
-                <span class="rag-panel__label">💬 深度追问</span>
+                <span class="rag-panel__label"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> 深度追问</span>
                 <p id="rag-article-title" class="rag-panel__article-title">正在加载...</p>
             </div>
             <button id="rag-close-btn" class="rag-close-btn" aria-label="关闭">
@@ -404,10 +412,10 @@
             <!-- Tabs: AI Wizard / Manual -->
             <div id="board-mode-tabs" class="board-mode-tabs">
                 <button type="button" class="board-mode-tab active" data-mode="wizard" onclick="switchBoardMode('wizard')">
-                    ✨ AI 向导
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.3rem;vertical-align:middle;"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg> AI 向导
                 </button>
                 <button type="button" class="board-mode-tab" data-mode="manual" onclick="switchBoardMode('manual')">
-                    ✏️ 手动填写
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.3rem;vertical-align:middle;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> 手动填写
                 </button>
             </div>
 
@@ -415,19 +423,19 @@
             <div id="board-wizard-panel" class="board-wizard-panel">
                 <div class="wizard-presets" style="margin-bottom: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
                     <span style="font-size: 0.85rem; color: var(--text-secondary); line-height: 24px;">快捷模板:</span>
-                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('python_dev')">🐍 Python 开发</button>
-                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('ai_research')">🤖 AI 研究</button>
-                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('indie_hacker')">💻 独立开发者</button>
+                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('python_dev')">Python 开发</button>
+                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('ai_research')">AI 研究</button>
+                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('indie_hacker')">独立开发者</button>
                 </div>
                 <div id="wizard-messages" class="wizard-messages">
-                    <div class="wizard-msg wizard-msg--ai">👋 告诉我你想要一个什么样的板块，比如：<br>"我想每天学 5 个英语商务单词"，<br>"汇总国内外顶级 AI 实验室的最新论文"，<br>"每天给我一条冷门心理学知识"...</div>
+                    <div class="wizard-msg wizard-msg--ai">告诉我你想要一个什么样的板块，比如：<br>"我想每天学 5 个英语商务单词"，<br>"汇总国内外顶级 AI 实验室的最新论文"，<br>"每天给我一条冷门心理学知识"...</div>
                 </div>
                 <form class="wizard-input-row" onsubmit="submitWizard(event)">
                     <input id="wizard-input" type="text" placeholder="描述你的需求..." autocomplete="off">
                     <button type="submit" id="wizard-submit-btn" class="primary-btn">发送</button>
                 </form>
                 <div id="wizard-apply-row" class="wizard-apply-row" style="display:none;">
-                    <span>✅ AI 已生成推荐配置</span>
+                    <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> AI 已生成推荐配置</span>
                     <button type="button" class="primary-btn" onclick="applyWizardConfig()">应用到表单</button>
                 </div>
             </div>
@@ -446,8 +454,8 @@
                     <input type="text" id="board-name" required placeholder="e.g. 英语学习">
                 </div>
                 <div class="form-group">
-                    <label>图标 (Emoji)</label>
-                    <input type="text" id="board-icon" required placeholder="e.g. 🇬🇧" value="📌">
+                    <label>图标 (Icon)</label>
+                    <input type="text" id="board-icon" required placeholder="e.g. ❖" value="❖">
                 </div>
                 <div class="form-group">
                     <label>数据源类型</label>
@@ -561,6 +569,17 @@
                         </div>
                     </div>
 
+                    <div class="form-group-row">
+                        <div class="form-group">
+                            <label>输出语言 <small>控制简报/周报/补读的输出语言</small></label>
+                            <select id="board-output-language">
+                                <option value="auto">自动 (跟随源文)</option>
+                                <option value="zh">中文</option>
+                                <option value="en">English</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="form-group">
                         <label>多视角 (Perspectives) <small>JSON 格式，如 {"active":["technical","business"]}</small></label>
                         <textarea id="board-perspectives" style="height:60px; font-family:monospace; font-size:0.85rem;" placeholder='{"active": ["overview"]}'></textarea>
@@ -595,7 +614,26 @@
         </div>
     </div>
 
+    <!-- Saved Articles Modal -->
+    <div id="saved-modal" class="modal-overlay" onclick="if(event.target === this) toggleSavedPanel()">
+        <div class="modal-content saved-modal-content">
+            <div class="persona-header">
+                <h3>我的收藏</h3>
+                <button class="close-btn" onclick="toggleSavedPanel()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="saved-tabs">
+                <button class="saved-tab active" data-status="favorite" onclick="switchSavedTab('favorite')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.3rem;vertical-align:middle;"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg> 收藏</button>
+                <button class="saved-tab" data-status="read_later" onclick="switchSavedTab('read_later')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.3rem;vertical-align:middle;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> 稍后阅读</button>
+            </div>
+            <div id="saved-list" class="saved-list">
+                <p class="saved-placeholder">加载中...</p>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/static/app.js?v=8"></script>
+    <script src="/static/app.js?v=10"></script>
 </body>
 </html>

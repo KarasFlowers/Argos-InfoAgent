@@ -2996,6 +2996,63 @@ html.light-mode .secondary-btn:disabled:hover {
     transform: scale(1.05);
 }
 
+.pref-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding-top: 8px;
+    margin-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.pref-suggestions:empty {
+    display: none;
+}
+
+.pref-suggestion-label {
+    width: 100%;
+    font-size: 0.68rem;
+    color: var(--text-muted, #6b7280);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 1px;
+}
+
+.pref-suggestion-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 9px;
+    border-radius: 5px;
+    font-size: 0.75rem;
+    background: transparent;
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    color: var(--text-muted, #9ca3af);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.pref-suggestion-chip:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-style: solid;
+    color: var(--text-primary);
+}
+
+html.light-mode .pref-suggestions {
+    border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+html.light-mode .pref-suggestion-chip {
+    border-color: rgba(0, 0, 0, 0.2);
+    color: var(--text-muted, #6b7280);
+}
+
+html.light-mode .pref-suggestion-chip:hover {
+    background: rgba(0, 0, 0, 0.05);
+    border-style: solid;
+    color: var(--text-primary);
+}
+
 /* ---------------------------------------------------------------
    Insights Modal
 --------------------------------------------------------------- */
@@ -3852,5 +3909,149 @@ html.light-mode .catchup-news-item:hover {
 
 html.light-mode .catchup-news-category {
     background: rgba(0, 0, 0, 0.04);
+}
+
+/* ---------------------------------------------------------------
+   Saved Articles (Favorite / Read Later)
+--------------------------------------------------------------- */
+
+.feedback-btn.favorite:hover,
+.feedback-btn.favorite.active {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.15);
+}
+.feedback-btn.favorite.active svg {
+    fill: #f59e0b;
+}
+
+.feedback-btn.read-later:hover,
+.feedback-btn.read-later.active {
+    color: #8b5cf6;
+    background: rgba(139, 92, 246, 0.15);
+}
+.feedback-btn.read-later.active svg {
+    fill: #8b5cf6;
+}
+
+.saved-modal-content {
+    max-width: 560px;
+}
+
+.saved-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+}
+
+.saved-tab {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.saved-tab:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.saved-tab.active {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.08);
+    font-weight: 600;
+}
+
+html.light-mode .saved-tab:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+html.light-mode .saved-tab.active {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.saved-list {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.saved-placeholder {
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 2rem 0;
+    font-size: 0.9rem;
+    opacity: 0.6;
+}
+
+.saved-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.85rem 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    transition: background 0.2s ease;
+}
+
+.saved-item:hover {
+    background: var(--surface-hover);
+}
+
+.saved-item:last-child {
+    border-bottom: none;
+}
+
+.saved-item__info {
+    flex: 1;
+    min-width: 0;
+}
+
+.saved-item__headline {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    line-height: 1.4;
+    margin-bottom: 0.25rem;
+    word-break: break-word;
+}
+
+.saved-item__headline a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.saved-item__headline a:hover {
+    text-decoration: underline;
+}
+
+.saved-item__meta {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.saved-item__remove {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.saved-item__remove:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
 }
 
