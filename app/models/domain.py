@@ -25,6 +25,7 @@ class Board(SQLModel, table=True):
     notify_channels: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))  # comma-separated: "email,webhook,bark" ; empty = all configured
     perspectives: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # e.g. {"active": ["technical", "business"]}; None = single-view mode
     prompt_key: str = Field(default="daily_briefing", sa_column=Column(Text, nullable=False, server_default="daily_briefing"))  # prompt template key
+    output_language: str = Field(default="auto", sa_column=Column(Text, nullable=False, server_default="auto"))  # "auto" | "zh" | "en" — forces LLM output language
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -284,3 +285,26 @@ class SummaryViewLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     date: str = Field(index=True, unique=True)        # YYYY-MM-DD
     viewed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+# ---------------------------------------------------------------------------
+# Saved Articles (Favorites / Read Later)
+# ---------------------------------------------------------------------------
+
+
+class SavedArticle(SQLModel, table=True):
+    """A user-saved article. Two independent statuses are supported so the same
+    article can be both favorited and queued for later reading."""
+    __table_args__ = (
+        UniqueConstraint("article_url", "status", name="ux_savedarticle_url_status"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    article_url: str = Field(index=True)
+    status: str = Field(default="favorite", index=True)  # "favorite" | "read_later"
+    # Display snapshot (so the saved list renders without joining DailySummary)
+    headline: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))
+    source: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))
+    category: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))
+    board_slug: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
