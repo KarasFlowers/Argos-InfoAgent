@@ -137,12 +137,14 @@ class CatchupMixin:
     async def generate_catchup_digest(
         self,
         summaries: list[dict],
+        output_language: str | None = None,
     ) -> DailySummaryResponse | None:
         """
         Generate a condensed catch-up digest from multiple days of summaries.
 
         Args:
             summaries: List of DailySummaryResponse.model_dump() dicts.
+            output_language: Optional board output language ("zh"|"en"|"auto").
 
         Returns:
             A DailySummaryResponse representing the condensed digest, or None.
@@ -154,11 +156,13 @@ class CatchupMixin:
             logger.info("No summaries provided for catch-up digest.")
             return None
 
+        from app.core.llm_config import language_directive
+
         # Step 1: Pre-filter — keep only high-importance items
         filtered = await self._score_catchup_items(summaries)
 
         catchup_data = _build_catchup_data(filtered)
-        prompt = get_prompt("catchup_digest")
+        prompt = get_prompt("catchup_digest") + language_directive(output_language)
 
         # Derive a representative date (latest date in the set)
         dates = sorted(s.get("date", "") for s in summaries)

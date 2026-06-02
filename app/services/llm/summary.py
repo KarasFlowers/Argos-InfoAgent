@@ -158,7 +158,9 @@ class SummaryMixin:
             "}\n"
             "Both `overview` and `top_news` are REQUIRED."
         )
-        system_prompt = base_prompt + schema_suffix
+        from app.core.llm_config import language_directive
+        lang_directive = language_directive(getattr(board, "output_language", None) if board else None)
+        system_prompt = base_prompt + schema_suffix + lang_directive
 
         persona_context = ""
         personas = []

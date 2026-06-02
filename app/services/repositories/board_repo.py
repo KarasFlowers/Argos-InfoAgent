@@ -49,6 +49,7 @@ class BoardRepo:
         notify_channels: str = "",
         perspectives: dict | None = None,
         prompt_key: str = "daily_briefing",
+        output_language: str = "auto",
     ) -> Board:
         board = Board(
             slug=slug,
@@ -63,6 +64,7 @@ class BoardRepo:
             notify_channels=notify_channels,
             perspectives=perspectives,
             prompt_key=prompt_key,
+            output_language=output_language,
         )
         session.add(board)
         await session.commit()
@@ -78,7 +80,8 @@ class BoardRepo:
         allowed = {
             "name", "icon", "description", "system_prompt",
             "source_type", "source_config", "display_order", "is_active",
-            "schedule", "notify_channels", "perspectives", "prompt_key"
+            "schedule", "notify_channels", "perspectives", "prompt_key",
+            "output_language"
         }
         for key, value in updates.items():
             if key in allowed and value is not None:

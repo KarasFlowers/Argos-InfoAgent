@@ -28,6 +28,7 @@ class WeeklyMixin:
     async def generate_weekly_consolidation(
         self,
         summaries: list[dict],
+        output_language: str | None = None,
     ) -> str | None:
         """
         Backward-compatible: single-stage magazine-style recap.
@@ -36,8 +37,9 @@ class WeeklyMixin:
         if not settings.effective_llm_api_key:
             return None
 
+        from app.core.llm_config import language_directive
         week_data = _build_week_data(summaries)
-        editor_prompt = get_prompt("weekly_editor")
+        editor_prompt = get_prompt("weekly_editor") + language_directive(output_language)
 
         try:
             response = await self.llm.chat(
@@ -61,6 +63,7 @@ class WeeklyMixin:
     async def generate_structured_weekly_report(
         self,
         summaries: list[dict],
+        output_language: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Multi-stage weekly report pipeline:
@@ -74,6 +77,8 @@ class WeeklyMixin:
         if not settings.effective_llm_api_key:
             return None
 
+        from app.core.llm_config import language_directive
+        lang_directive = language_directive(output_language)
         week_data = _build_week_data(summaries)
         result: dict[str, Any] = {"themes": [], "stats": {}, "editorial": ""}
 
@@ -120,7 +125,7 @@ class WeeklyMixin:
 
         # Stage 3: Editorial (smart LLM) — pass theme context for richer output
         try:
-            editor_prompt = get_prompt("weekly_editor")
+            editor_prompt = get_prompt("weekly_editor") + lang_directive
             themes_context = ""
             if result["themes"]:
                 themes_context = "\n\nKey themes identified this week:\n"
