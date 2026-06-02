@@ -69,6 +69,10 @@ async def _ensure_legacy_columns(conn) -> None:
         await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN prompt_key TEXT NOT NULL DEFAULT 'daily_briefing'")
     # Fix any rows where prompt_key ended up as NULL
     await conn.exec_driver_sql("UPDATE board SET prompt_key = 'daily_briefing' WHERE prompt_key IS NULL")
+    if "output_language" not in board_columns:
+        await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN output_language TEXT NOT NULL DEFAULT 'auto'")
+    # Fix any rows where output_language ended up as NULL
+    await conn.exec_driver_sql("UPDATE board SET output_language = 'auto' WHERE output_language IS NULL")
 
     # NewsItem: new column added in refactor (topic_path)
     newsitem_result = await conn.exec_driver_sql("PRAGMA table_info(newsitem)")
@@ -463,6 +467,8 @@ async def init_db():
             FilteredItem,
             SourceHealthLog,
             DailyReportRefinementSession,
+            SummaryViewLog,
+            SavedArticle,
         )
         await conn.run_sync(SQLModel.metadata.create_all)
         await _ensure_legacy_columns(conn)

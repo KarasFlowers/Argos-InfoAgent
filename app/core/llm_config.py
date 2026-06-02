@@ -55,3 +55,33 @@ def parse_tier_spec(
 
     # Plain model name — same endpoint, different model
     return fallback_base_url, fallback_api_key, spec
+
+
+# ---------------------------------------------------------------------------
+# Output language control
+# ---------------------------------------------------------------------------
+
+def language_directive(code: str | None) -> str:
+    """Return a system-prompt directive that forces the LLM output language.
+
+    Args:
+        code: Board output_language — ``"zh"``, ``"en"``, or ``"auto"``/None.
+
+    Returns:
+        A directive string to append to the system prompt, or ``""`` when
+        ``auto`` (let the model follow the source language).
+    """
+    normalized = (code or "auto").strip().lower()
+    if normalized == "zh":
+        return (
+            "\n\nLANGUAGE REQUIREMENT: You MUST write ALL output "
+            "(overview, headlines, key_points, tags, and any narrative text) "
+            "in Simplified Chinese, regardless of the source article language."
+        )
+    if normalized == "en":
+        return (
+            "\n\nLANGUAGE REQUIREMENT: You MUST write ALL output "
+            "(overview, headlines, key_points, tags, and any narrative text) "
+            "in English, regardless of the source article language."
+        )
+    return ""

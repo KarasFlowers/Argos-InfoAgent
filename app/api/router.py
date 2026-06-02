@@ -2,7 +2,7 @@ import asyncio
 import html as html_mod
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -40,6 +40,7 @@ class BoardCreateRequest(BaseModel):
     notify_channels: str = Field(default="")
     perspectives: Optional[dict] = None
     prompt_key: str = Field(default="daily_briefing")
+    output_language: str = Field(default="auto", pattern=r"^(auto|zh|en)$")
 
 
 class BoardUpdateRequest(BaseModel):
@@ -55,6 +56,7 @@ class BoardUpdateRequest(BaseModel):
     notify_channels: Optional[str] = None
     perspectives: Optional[dict] = None
     prompt_key: Optional[str] = None
+    output_language: Optional[str] = Field(default=None, pattern=r"^(auto|zh|en)$")
 
 
 class BoardPreviewRequest(BaseModel):
@@ -71,6 +73,7 @@ class BoardPreviewRequest(BaseModel):
     prompt_key: str = Field(default="daily_briefing")
     original_slug: Optional[str] = Field(default=None, max_length=64, pattern=r"^[a-z0-9_\-]+$")
     perspective: str = Field(default="overview", max_length=64)
+    output_language: str = Field(default="auto", pattern=r"^(auto|zh|en)$")
 
 
 class BoardWizardMessage(BaseModel):
@@ -776,6 +779,71 @@ async def feedback_save_reason(
     return {"status": "ok"}
 
 
+# ------------------------------------------------------------------
+# Saved articles (Favorites / Read Later)
+# ------------------------------------------------------------------
+
+
+class SavedArticleRequest(BaseModel):
+    url: str = Field(min_length=5, max_length=2048)
+    status: Literal["favorite", "read_later"]
+    headline: str = Field(default="", max_length=500)
+    source: str = Field(default="", max_length=200)
+    category: str = Field(default="", max_length=120)
+    board: str = Field(default="", max_length=64)
+
+
+class SavedArticleDeleteRequest(BaseModel):
+    url: str = Field(min_length=5, max_length=2048)
+    status: Literal["favorite", "read_later"]
+
+
+@api_router.get("/saved")
+async def list_saved_articles(
+    status: Literal["favorite", "read_later"] = Query("favorite"),
+    limit: int = Query(default=200, ge=1, le=500),
+):
+    """List saved articles for a given status (favorite | read_later)."""
+    from app.services.saved_service import list_saved
+    return {"status": status, "items": await list_saved(status, limit=limit)}
+
+
+@api_router.get("/saved/urls")
+async def get_saved_url_map_endpoint():
+    """Return {url: [status, ...]} for highlighting saved articles in the UI."""
+    from app.services.saved_service import get_saved_url_map
+    return await get_saved_url_map()
+
+
+@api_router.post("/saved")
+async def add_saved_article(payload: SavedArticleRequest):
+    """Save an article under the given status."""
+    from app.services.saved_service import add_saved
+    try:
+        await add_saved(
+            payload.url,
+            payload.status,
+            headline=payload.headline,
+            source=payload.source,
+            category=payload.category,
+            board_slug=payload.board,
+        )
+        return {"status": "ok"}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@api_router.delete("/saved")
+async def remove_saved_article(payload: SavedArticleDeleteRequest):
+    """Remove a saved article for the given status."""
+    from app.services.saved_service import remove_saved
+    try:
+        await remove_saved(payload.url, payload.status)
+        return {"status": "ok"}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @api_router.get("/persona/inferred")
 async def get_inferred_persona(session: AsyncSession = Depends(get_session)):
     """
@@ -819,6 +887,7 @@ def _serialize_board(board) -> dict:
         "source_config": board.source_config or {},
         "perspectives": board.perspectives or {},
         "prompt_key": board.prompt_key or "daily_briefing",
+        "output_language": getattr(board, "output_language", "auto") or "auto",
         "schedule": board.schedule or "",
         "notify_channels": board.notify_channels or "",
         "display_order": board.display_order,
@@ -926,6 +995,7 @@ async def create_board(
         notify_channels=payload.notify_channels,
         perspectives=payload.perspectives,
         prompt_key=payload.prompt_key,
+        output_language=payload.output_language,
     )
     return _serialize_board(board)
 
@@ -1010,6 +1080,7 @@ async def preview_board_from_payload(
         notify_channels=payload.notify_channels,
         perspectives=payload.perspectives,
         prompt_key=payload.prompt_key,
+        output_language=payload.output_language,
     )
 
     return await _run_board_preview_runtime(runtime_board, session, perspective=payload.perspective)
@@ -1106,7 +1177,9 @@ async def get_weekly_insight(
         raise HTTPException(status_code=404, detail="Failed to retrieve history content.")
 
     # 3. Generate consolidation
-    insight = await llm_service.generate_weekly_consolidation(summaries_data)
+    insight = await llm_service.generate_weekly_consolidation(
+        summaries_data, output_language=getattr(board_obj, "output_language", None)
+    )
     if not insight:
         raise HTTPException(status_code=500, detail="Failed to generate weekly insight.")
 
@@ -1140,7 +1213,9 @@ async def get_weekly_report(
     if not summaries_data:
         raise HTTPException(status_code=404, detail="Failed to retrieve history content.")
 
-    report = await llm_service.generate_structured_weekly_report(summaries_data)
+    report = await llm_service.generate_structured_weekly_report(
+        summaries_data, output_language=getattr(board_obj, "output_language", None)
+    )
     if not report:
         raise HTTPException(status_code=500, detail="Failed to generate weekly report.")
 
@@ -1214,28 +1289,34 @@ async def generate_catchup_digest(
                 since_hours=since_hours,
             )
             if summary:
-                # Save the backfilled summary for the latest gap date
-                summary.date = earliest_gap
-                try:
-                    await db_service.save_summary(session, summary, board_id=board_id)
-                    backfilled_dates.append(earliest_gap)
-                except IntegrityError:
-                    await session.rollback()
-                    logger.warning("Backfill summary already exists for %s", earliest_gap)
-                except Exception:
-                    logger.exception("Failed to save backfill for %s", earliest_gap)
-                    await session.rollback()
+                # Save the backfilled summary for ALL gap dates
+                for gap_date in gaps:
+                    summary.date = gap_date
+                    try:
+                        await db_service.save_summary(session, summary, board_id=board_id)
+                        backfilled_dates.append(gap_date)
+                    except IntegrityError:
+                        await session.rollback()
+                        logger.warning("Backfill summary already exists for %s", gap_date)
+                    except Exception:
+                        logger.exception("Failed to save backfill for %s", gap_date)
+                        await session.rollback()
         except UnknownSourceTypeError as error:
             logger.error("Catchup backfill: unsupported source_type '%s': %s", board_obj.source_type, error)
         except Exception:
             logger.exception("Catchup backfill failed for board '%s'", board_obj.slug)
 
-    # Step 3: Collect all unviewed summaries
+    # Step 3: Collect all unviewed summaries (deduplicate backfilled content)
     all_dates = sorted(set(unviewed + backfilled_dates))
     summaries_data: list[dict] = []
+    seen_overviews: set[str] = set()
     for d in all_dates:
         full = await db_service.get_summary_by_date(session, d, board_id=board_id)
         if full:
+            overview_key = (full.overview or "")[:80]
+            if overview_key and overview_key in seen_overviews:
+                continue
+            seen_overviews.add(overview_key)
             summaries_data.append(full.model_dump())
 
     if not summaries_data:
@@ -1248,7 +1329,9 @@ async def generate_catchup_digest(
         }
 
     # Step 4: Generate condensed digest
-    digest = await llm_service.generate_catchup_digest(summaries_data)
+    digest = await llm_service.generate_catchup_digest(
+        summaries_data, output_language=getattr(board_obj, "output_language", None)
+    )
 
     # Step 5: Mark all covered dates as viewed
     for d in all_dates:
