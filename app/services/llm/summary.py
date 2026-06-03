@@ -464,9 +464,11 @@ class SummaryMixin:
                 ]
                 input_json = json.dumps(input_articles[:12], ensure_ascii=False)
 
+                from app.core.llm_config import language_directive as _lang_dir
+                lang_directive = _lang_dir(getattr(board, "output_language", None) if board else None)
                 response = await self.llm.chat(
                     messages=[
-                        {"role": "system", "content": perspective_prompt + schema_suffix},
+                        {"role": "system", "content": perspective_prompt + schema_suffix + lang_directive},
                         {
                             "role": "user",
                             "content": f"Today's Date: {datetime.now().strftime('%Y-%m-%d')}\n\nHere are the articles (respond in JSON):\n{input_json}",
@@ -561,7 +563,9 @@ class SummaryMixin:
             f"Produce exactly {items_per_day} items. All content must be original and factual."
         )
 
-        system_content = base_prompt + persona_context + "\n\n" + output_schema + ("\nYou must respond in JSON format." if "json" not in (base_prompt + persona_context + output_schema).lower() else "")
+        from app.core.llm_config import language_directive as _lang_dir
+        lang_directive = _lang_dir(getattr(board, "output_language", None))
+        system_content = base_prompt + persona_context + "\n\n" + output_schema + lang_directive + ("\nYou must respond in JSON format." if "json" not in (base_prompt + persona_context + output_schema + lang_directive).lower() else "")
         user_content = f"Today's Date: {datetime.now().strftime('%Y-%m-%d')}. Produce today's items now."
 
         try:

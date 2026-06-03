@@ -38,8 +38,13 @@
    - Hacker News https://hnrss.org/frontpage
    - TechCrunch https://techcrunch.com/feed/
    - The Verge https://www.theverge.com/rss/index.xml
-6. 确保只输出 JSON，不要任何外层文字或代码块标记。
-7. config 中的 source_config 是一个 dict，内容根据 source_type 而定：
+6. RSS 源可用性（重要）：
+   - source_config.feeds 中只能填写**真实存在、当前公开可访问**的 RSS/Atom 地址，不要编造或拼凑 URL。
+   - 优先选用知名、稳定、长期可用的源（如 hnrss.org、sspai.com/feed、ruanyifeng.com 等）。
+   - 系统会在返回后自动检测每个源是否可用，失效的源会提示用户替换，因此请尽量给出你最有把握的地址。
+   - 如果对某主题的源不确定，可适当多给 1-2 个备选，提高命中可用源的概率。
+7. 确保只输出 JSON，不要任何外层文字或代码块标记。
+8. config 中的 source_config 是一个 dict，内容根据 source_type 而定：
    - rss: {"feeds": ["url1", "url2"]}
    - hackernews: {"fetch_top_stories": 30, "min_score": 100}
    - reddit: {"subreddits": [...], "fetch_comments": 5}

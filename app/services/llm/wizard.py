@@ -86,6 +86,70 @@ class WizardMixin:
             }
 
 
+    async def suggest_alternative_feeds(
+        self,
+        topic: str,
+        broken_urls: list[str],
+    ) -> list[dict]:
+        """
+        Given a board topic and a list of broken/unreachable RSS URLs, ask the
+        LLM to propose 2-3 alternative, real, commonly-used public RSS feed URLs
+        for each broken one.
+
+        Returns a list of:
+          [{"original": "<broken_url>", "suggestions": ["<url1>", "<url2>"]}, ...]
+        """
+        if not settings.effective_llm_api_key:
+            return [{"original": u, "suggestions": []} for u in broken_urls]
+
+        broken_list = "\n".join(f"- {u}" for u in broken_urls)
+        prompt = (
+            "你是一名 RSS 源专家。用户的板块主题如下，其中部分 RSS 源已失效/无法访问。"
+            "请为每个失效的源推荐 2-3 个**真实存在、常用、公开可访问**的替代 RSS feed 地址，"
+            "替代源应与板块主题及原源的内容方向尽量一致。\n\n"
+            f"板块主题：{topic}\n\n"
+            f"失效的源：\n{broken_list}\n\n"
+            "要求：\n"
+            "1. 只推荐你确信真实存在的公开 RSS/Atom 地址，优先知名稳定的源。\n"
+            "2. 不要重复推荐已失效的源。\n"
+            '3. 输出 JSON：{"alternatives": [{"original": "<失效URL>", '
+            '"suggestions": ["<替代URL1>", "<替代URL2>"]}]} ，不要额外文本。\n'
+        )
+
+        try:
+            response = await self.llm.chat(
+                messages=[{"role": "system", "content": prompt}],
+                tier="smart",
+                label="wizard_fix_feeds",
+                response_format={"type": "json_object"},
+                temperature=0.4,
+                max_tokens=800,
+            )
+            data = json.loads(response.choices[0].message.content or "{}")
+            raw_alts = data.get("alternatives", []) if isinstance(data, dict) else []
+            result: list[dict] = []
+            for item in raw_alts:
+                if not isinstance(item, dict):
+                    continue
+                original = str(item.get("original", "")).strip()
+                suggestions = [
+                    str(u).strip()
+                    for u in (item.get("suggestions") or [])
+                    if isinstance(u, str) and u.strip()
+                ]
+                if original:
+                    result.append({"original": original, "suggestions": suggestions[:3]})
+            # Ensure every broken URL has an entry, even if LLM omitted some.
+            covered = {r["original"] for r in result}
+            for u in broken_urls:
+                if u not in covered:
+                    result.append({"original": u, "suggestions": []})
+            return result
+        except Exception as error:
+            logger.warning("suggest_alternative_feeds failed: %s", error)
+            return [{"original": u, "suggestions": []} for u in broken_urls]
+
+
     async def extract_interest_options(
         self,
         headline: str,
