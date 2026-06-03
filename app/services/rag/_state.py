@@ -85,6 +85,37 @@ def _require_rag() -> None:
         )
 
 
+def _reset_hf_http_client() -> None:
+    """Invalidate huggingface_hub's internal httpx.Client.
+
+    Works around a known bug where the module-level httpx.Client used by
+    ``huggingface_hub`` is garbage-collected or closed prematurely (often
+    in multi-threaded contexts), causing ``RuntimeError: Cannot send a
+    request, as the client has been closed`` on subsequent requests.
+
+    After calling this function, the next request will lazily create a
+    fresh client.
+    """
+    try:
+        import huggingface_hub
+        # huggingface_hub >= 0.24 exposes an official API
+        if hasattr(huggingface_hub, "configure_http_backend"):
+            huggingface_hub.configure_http_backend(backend=None)
+            logger.debug("Reset huggingface_hub HTTP backend via configure_http_backend")
+            return
+    except Exception:
+        pass
+    try:
+        # Fallback for older versions: reset the internal module attribute
+        from huggingface_hub.utils import _http as hf_http
+        for attr in ("_global_client", "_http_client"):
+            if hasattr(hf_http, attr):
+                setattr(hf_http, attr, None)
+        logger.debug("Reset huggingface_hub HTTP client via internal attribute")
+    except Exception:
+        logger.debug("Could not reset huggingface_hub HTTP client", exc_info=True)
+
+
 # -------------------------------------------------------------------
 # Model Loading (cached, loaded once at startup)
 # -------------------------------------------------------------------
@@ -95,7 +126,19 @@ def get_bi_encoder():
     _require_rag()
     from sentence_transformers import SentenceTransformer
     logger.info("Loading Bi-Encoder model (BAAI/bge-m3)")
-    return SentenceTransformer("BAAI/bge-m3")
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            return SentenceTransformer("BAAI/bge-m3")
+        except RuntimeError as exc:
+            if "client has been closed" in str(exc) and attempt < max_retries:
+                logger.warning(
+                    "huggingface_hub httpx client closed (attempt %d/%d), resetting and retrying",
+                    attempt, max_retries,
+                )
+                _reset_hf_http_client()
+                continue
+            raise
 
 
 @lru_cache(maxsize=1)
@@ -104,7 +147,19 @@ def get_cross_encoder():
     _require_rag()
     from sentence_transformers import CrossEncoder
     logger.info("Loading Cross-Encoder rerank model")
-    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        except RuntimeError as exc:
+            if "client has been closed" in str(exc) and attempt < max_retries:
+                logger.warning(
+                    "huggingface_hub httpx client closed (attempt %d/%d), resetting and retrying",
+                    attempt, max_retries,
+                )
+                _reset_hf_http_client()
+                continue
+            raise
 
 
 # -------------------------------------------------------------------
@@ -194,6 +249,11 @@ def prewarm_models() -> None:
     if not is_rag_available():
         logger.info("RAG is disabled or dependencies missing; skipping model pre-warm")
         return
+    # Ensure huggingface_hub starts with a clean HTTP client state.
+    # This prevents the "client has been closed" RuntimeError that can
+    # occur when the internal httpx.Client is GC'd or closed by another
+    # thread before model loading begins.
+    _reset_hf_http_client()
     logger.info("Pre-warming Bi-Encoder model (BAAI/bge-m3)")
     get_bi_encoder()
     logger.info("Pre-warming Cross-Encoder model")
