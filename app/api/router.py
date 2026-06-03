@@ -84,6 +84,11 @@ class BoardWizardMessage(BaseModel):
 
 class BoardWizardRequest(BaseModel):
     messages: list[BoardWizardMessage] = Field(min_length=1, max_length=20)
+    # Optional context for natural-language modification: the most recent
+    # suggested config and its validation results, so the LLM can refine rather
+    # than start over.
+    current_config: Optional[dict] = None
+    source_validation: Optional[list[dict]] = None
 
 
 _summary_generation_lock = asyncio.Lock()
@@ -1027,22 +1032,221 @@ async def create_board(
     return _serialize_board(board)
 
 
-async def _validate_config_feeds(config: dict | None, timeout: float = 8.0) -> list[dict] | None:
+async def _probe_url(
+    source_type: str,
+    label: str,
+    url: str,
+    timeout: float,
+    headers: dict | None = None,
+) -> dict:
+    """Lightweight reachability probe for a single non-RSS source target."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+            resp = await client.get(url, timeout=timeout)
+            resp.raise_for_status()
+        return {"source_type": source_type, "label": label, "url": url, "ok": True}
+    except httpx.HTTPStatusError as e:
+        return {"source_type": source_type, "label": label, "url": url, "ok": False, "error": f"HTTP {e.response.status_code}"}
+    except httpx.TimeoutException:
+        return {"source_type": source_type, "label": label, "url": url, "ok": False, "error": f"请求超时 ({int(timeout)}s)"}
+    except httpx.ConnectError:
+        return {"source_type": source_type, "label": label, "url": url, "ok": False, "error": "连接失败"}
+    except Exception as e:
+        return {"source_type": source_type, "label": label, "url": url, "ok": False, "error": str(e)[:120]}
+
+
+def _github_headers() -> dict:
+    headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "Argos-Wizard"}
+    token = getattr(settings, "GITHUB_TOKEN", None)
+    if token:
+        headers["Authorization"] = f"token {token}"
+    return headers
+
+
+_REDDIT_PROBE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+}
+
+
+async def _count_via_scraper(source_type: str, cfg: dict, since_hours: int = 168) -> list:
+    """Run the relevant scraper for a single-target config and return ContentItems."""
+    from datetime import timedelta, timezone
+
+    from app.core.http_client import get_http_client
+
+    client = get_http_client()
+    since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+    scraper_cfg = {"enabled": True, **cfg}
+
+    if source_type == "hackernews":
+        from app.scrapers.hackernews import HackerNewsScraper
+        scraper = HackerNewsScraper(scraper_cfg, client)
+    elif source_type == "reddit":
+        from app.scrapers.reddit import RedditScraper
+        scraper = RedditScraper(scraper_cfg, client)
+    elif source_type == "github":
+        from app.scrapers.github import GitHubScraper
+        scraper = GitHubScraper(scraper_cfg, client)
+    else:
+        return []
+    try:
+        return await scraper.fetch(since)
+    except Exception as error:
+        logger.warning("preview scraper '%s' failed: %s", source_type, error)
+        return []
+
+
+async def _enrich_deep(entry: dict, source_type: str, cfg: dict) -> dict:
+    """When deep=True and the source is reachable, attach article_count + samples."""
+    if not entry.get("ok"):
+        return entry
+    items = await _count_via_scraper(source_type, cfg)
+    entry["article_count"] = len(items)
+    entry["sample_titles"] = [getattr(i, "title", "Untitled") for i in items[:5]]
+    return entry
+
+
+async def _validate_source_group(
+    source_type: str,
+    cfg: dict,
+    timeout: float,
+    deep: bool,
+) -> list[dict]:
+    """Validate one source-type config block; returns a list of per-target entries."""
+    cfg = cfg or {}
+
+    if source_type == "rss":
+        feeds = [u for u in (cfg.get("feeds") or []) if isinstance(u, str) and u.strip()]
+        if not feeds:
+            return []
+        results = await asyncio.gather(*[_test_single_feed(u, timeout=timeout) for u in feeds])
+        return [
+            {
+                "source_type": "rss",
+                "label": r.get("url"),
+                "url": r.get("url"),
+                "ok": r.get("ok", False),
+                "article_count": r.get("article_count", 0),
+                "feed_title": r.get("feed_title"),
+                "sample_titles": r.get("sample_titles", []),
+                "error": r.get("error"),
+            }
+            for r in results
+        ]
+
+    if source_type == "hackernews":
+        entry = await _probe_url(
+            "hackernews", "Hacker News",
+            "https://hacker-news.firebaseio.com/v0/topstories.json", timeout,
+        )
+        if deep:
+            entry = await _enrich_deep(entry, "hackernews", cfg)
+        return [entry]
+
+    if source_type == "github":
+        tasks = []
+        for repo in cfg.get("repos", []):
+            owner = (repo or {}).get("owner", "")
+            name = (repo or {}).get("repo", "")
+            if not owner or not name:
+                continue
+            label = f"{owner}/{name}"
+            tasks.append(("github", label, f"https://api.github.com/repos/{owner}/{name}", {"repos": [repo]}))
+        for user in cfg.get("users", []):
+            uname = user.get("username", "") if isinstance(user, dict) else str(user)
+            if not uname:
+                continue
+            single = user if isinstance(user, dict) else {"username": uname}
+            tasks.append(("github", uname, f"https://api.github.com/users/{uname}", {"users": [single]}))
+        gh_headers = _github_headers()
+        entries = await asyncio.gather(
+            *[_probe_url(st, label, url, timeout, headers=gh_headers) for st, label, url, _ in tasks]
+        )
+        entries = list(entries)
+        if deep:
+            entries = await asyncio.gather(
+                *[_enrich_deep(e, "github", sub_cfg) for e, (_, _, _, sub_cfg) in zip(entries, tasks)]
+            )
+        return list(entries)
+
+    if source_type == "pure_llm":
+        return [{"source_type": "pure_llm", "label": "纯 LLM 生成", "ok": True, "article_count": 0, "sample_titles": []}]
+
+    if source_type == "reddit":
+        tasks = []
+        for sub in cfg.get("subreddits", []):
+            name = sub.get("subreddit", "") if isinstance(sub, dict) else str(sub)
+            if not name:
+                continue
+            single = {"subreddits": [sub if isinstance(sub, dict) else {"subreddit": name}]}
+            tasks.append(("reddit", f"r/{name}", f"https://www.reddit.com/r/{name}/about.json", single))
+        for user in cfg.get("users", []):
+            uname = user.get("username", "") if isinstance(user, dict) else str(user)
+            if not uname:
+                continue
+            single = {"users": [user if isinstance(user, dict) else {"username": uname}]}
+            tasks.append(("reddit", f"u/{uname}", f"https://www.reddit.com/user/{uname}/about.json", single))
+        entries = await asyncio.gather(
+            *[_probe_url(st, label, url, timeout, headers=_REDDIT_PROBE_HEADERS) for st, label, url, _ in tasks]
+        )
+        entries = list(entries)
+        if deep:
+            entries = await asyncio.gather(
+                *[_enrich_deep(e, "reddit", sub_cfg) for e, (_, _, _, sub_cfg) in zip(entries, tasks)]
+            )
+        return list(entries)
+
+    return []
+
+
+async def _validate_config_sources(
+    config: dict | None,
+    timeout: float = 8.0,
+    deep: bool = False,
+) -> list[dict]:
     """
-    If the wizard config is an RSS board with feeds, test each feed URL
-    concurrently and return a list of validation results. Returns None when
-    there is nothing to validate.
+    Validate every source declared by a wizard config, including each sub-source
+    of a ``multi`` board. Returns a flat list of per-target validation entries.
+    When ``deep`` is True, reachable non-RSS targets are additionally fetched to
+    report ``article_count`` and ``sample_titles``.
     """
-    if not config or config.get("source_type") != "rss":
-        return None
+    if not config:
+        return []
+    source_type = config.get("source_type")
     source_config = config.get("source_config") or {}
-    feeds = [u for u in (source_config.get("feeds") or []) if isinstance(u, str) and u.strip()]
+
+    if source_type == "multi":
+        groups = source_config.get("sources") or {}
+        results = await asyncio.gather(
+            *[_validate_source_group(st, gcfg, timeout, deep) for st, gcfg in groups.items()]
+        )
+        return [entry for group in results for entry in group]
+
+    return await _validate_source_group(source_type, source_config, timeout, deep)
+
+
+def _derive_feed_validation(source_validation: list[dict]) -> list[dict] | None:
+    """Extract RSS entries in the legacy feed_validation shape for the frontend."""
+    feeds = [e for e in source_validation if e.get("source_type") == "rss"]
     if not feeds:
         return None
-    results = await asyncio.gather(
-        *[_test_single_feed(u, timeout=timeout) for u in feeds]
-    )
-    return list(results)
+    return [
+        {
+            "url": e.get("url"),
+            "ok": e.get("ok", False),
+            "feed_title": e.get("feed_title"),
+            "article_count": e.get("article_count", 0),
+            "sample_titles": e.get("sample_titles", []),
+            "error": e.get("error"),
+        }
+        for e in feeds
+    ]
 
 
 @api_router.post("/boards/wizard")
@@ -1050,17 +1254,47 @@ async def board_wizard(payload: BoardWizardRequest):
     """
     Interactive AI-guided wizard to help users configure a new board.
     Accepts a conversation history, returns a reply plus (when ready) a suggested config.
-    When the config is an RSS board, each feed URL is validated and the results
-    are attached under ``feed_validation``.
+    Every declared source (including ``multi`` sub-sources) is validated and the
+    results are attached under ``source_validation``; RSS entries are also exposed
+    under ``feed_validation`` for backward compatibility.
     """
+    context = None
+    if payload.current_config or payload.source_validation:
+        context = {
+            "current_config": payload.current_config,
+            "source_validation": payload.source_validation,
+        }
+
     result = await llm_service.wizard_suggest_board(
-        [m.model_dump() for m in payload.messages]
+        [m.model_dump() for m in payload.messages],
+        context=context,
     )
     if result.get("ready") and result.get("config"):
-        validation = await _validate_config_feeds(result["config"])
-        if validation is not None:
-            result["feed_validation"] = validation
+        source_validation = await _validate_config_sources(result["config"])
+        if source_validation:
+            result["source_validation"] = source_validation
+            feed_validation = _derive_feed_validation(source_validation)
+            if feed_validation is not None:
+                result["feed_validation"] = feed_validation
     return result
+
+
+class WizardPreviewRequest(BaseModel):
+    config: dict
+
+
+@api_router.post("/boards/wizard/preview")
+async def wizard_preview(payload: WizardPreviewRequest):
+    """
+    Preview the fetch result of a wizard config without running the LLM summary.
+    Returns per-source reachability, article counts, and sample titles so the
+    user can judge whether each source (including ``multi`` sub-sources) works.
+    """
+    config = payload.config or {}
+    sources = await _validate_config_sources(config, timeout=12.0, deep=True)
+    total = sum((s.get("article_count") or 0) for s in sources)
+    ok = any(s.get("ok") for s in sources) if sources else False
+    return {"ok": ok, "sources": sources, "total_articles": total}
 
 
 class FixFeedsRequest(BaseModel):
