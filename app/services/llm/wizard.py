@@ -14,6 +14,7 @@ class WizardMixin:
     async def wizard_suggest_board(
         self,
         messages: list[dict],
+        context: dict | None = None,
     ) -> dict:
         """
         Interactive conversational wizard that helps a user configure a new content board.
@@ -38,6 +39,28 @@ class WizardMixin:
         system_prompt = get_prompt("board_wizard")
 
         full_messages = [{"role": "system", "content": system_prompt}]
+
+        # Inject the current config + validation as context so the LLM can refine
+        # an existing suggestion (natural-language modification) rather than
+        # starting from scratch.
+        if context:
+            ctx_parts = []
+            current_config = context.get("current_config")
+            source_validation = context.get("source_validation")
+            if current_config:
+                ctx_parts.append(f"当前配置：{json.dumps(current_config, ensure_ascii=False)}")
+            if source_validation:
+                ctx_parts.append(f"各源检测结果：{json.dumps(source_validation, ensure_ascii=False)}")
+            if ctx_parts:
+                full_messages.append({
+                    "role": "system",
+                    "content": (
+                        "[上下文] 用户正在基于已有配置进行调整，请在该配置基础上修改，"
+                        "保留可用的源、替换或移除失效的源，不要从零重建。\n"
+                        + "\n".join(ctx_parts)
+                    ),
+                })
+
         for m in messages:
             role = m.get("role", "user")
             if role not in ("user", "assistant"):

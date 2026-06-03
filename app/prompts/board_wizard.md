@@ -43,8 +43,15 @@
    - 优先选用知名、稳定、长期可用的源（如 hnrss.org、sspai.com/feed、ruanyifeng.com 等）。
    - 系统会在返回后自动检测每个源是否可用，失效的源会提示用户替换，因此请尽量给出你最有把握的地址。
    - 如果对某主题的源不确定，可适当多给 1-2 个备选，提高命中可用源的概率。
-7. 确保只输出 JSON，不要任何外层文字或代码块标记。
-8. config 中的 source_config 是一个 dict，内容根据 source_type 而定：
+7. 修改已有配置（重要）：
+   - 如果对话中出现 `[上下文]` 系统消息，说明用户在对一份已有配置做调整（如"内容太少，多加点技术源""去掉 GitHub 源""换个方向"）。
+   - 此时请在「当前配置」基础上**增量修改**，保留检测可用的源，只替换或移除失效的源，不要推倒重来。
+   - 如果「各源检测结果」中某个源 ok=false，优先用可用的替代源替换它，而不是简单删除。
+8. multi 混合源：
+   - source_config.sources 中每个子源（rss/hackernews/reddit/github）都要配置正确、可访问。
+   - 系统会对每个子源分别检测可用性，请确保 GitHub 的 owner/repo、Reddit 的 subreddit 等都真实存在。
+9. 确保只输出 JSON，不要任何外层文字或代码块标记。
+10. config 中的 source_config 是一个 dict，内容根据 source_type 而定：
    - rss: {"feeds": ["url1", "url2"]}
    - hackernews: {"fetch_top_stories": 30, "min_score": 100}
    - reddit: {"subreddits": [...], "fetch_comments": 5}
