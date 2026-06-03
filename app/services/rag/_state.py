@@ -183,6 +183,24 @@ _content_fallback: _BoundedLRU = _BoundedLRU(maxsize=256)
 # ChromaDB initialisation
 # -------------------------------------------------------------------
 
+def prewarm_models() -> None:
+    """Pre-load Bi-Encoder and Cross-Encoder models into memory.
+
+    Call this during application startup so the first user request
+    doesn't pay the model-loading cost.  Safe to call when RAG is
+    disabled (no-op).  Idempotent — subsequent calls are no-ops
+    because ``lru_cache`` keeps the models alive.
+    """
+    if not is_rag_available():
+        logger.info("RAG is disabled or dependencies missing; skipping model pre-warm")
+        return
+    logger.info("Pre-warming Bi-Encoder model (BAAI/bge-m3)")
+    get_bi_encoder()
+    logger.info("Pre-warming Cross-Encoder model")
+    get_cross_encoder()
+    logger.info("RAG models pre-warmed")
+
+
 def init_chroma() -> None:
     """Pre-warm ChromaDB and load existing collections.
 

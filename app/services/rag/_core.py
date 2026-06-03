@@ -31,6 +31,7 @@ from app.services.rag._state import (  # noqa: F401
     get_bi_encoder,
     get_cross_encoder,
     init_chroma,
+    prewarm_models,
     _get_chroma_client,
     _BoundedLRU,
     _ingested_urls,
