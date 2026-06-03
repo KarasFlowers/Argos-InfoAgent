@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/index.css?v=16">
+    <link rel="stylesheet" href="/static/index.css?v=25">
     <script>
         // Apply theme before first paint to avoid flash of dark background
         try {
@@ -200,11 +200,11 @@
                     <div id="magazine-recap-stats"></div>
                     <div class="magazine-action-bar">
                         <button id="gen-weekly-btn" class="magazine-gen-btn" onclick="triggerWeeklyInsight()">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 生成本周深读 (Wired Style)
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 生成本周深度汇总
                         </button>
                     </div>
                     <div id="weekly-insight-content" class="weekly-insight-content">
-                        <p class="magazine-placeholder">点击上方按钮，AI 主编将为你复盘本周技术版图的深层变革。</p>
+                        <p class="magazine-placeholder">点击上方按钮，AI 将为你提炼本周的核心技术动态与趋势。</p>
                     </div>
                 </div>
             </div>
@@ -405,12 +405,18 @@
     </div>
 
     <!-- Board Management Modal -->
-    <div id="board-modal" class="modal-overlay">
-        <div class="modal-content" style="max-width: 560px; width: 90%;">
-            <h3 id="board-modal-title">新建板块</h3>
+    <div id="board-modal" class="modal-overlay" onclick="if(event.target === this) closeBoardModal()">
+        <div class="modal-content board-modal-content" style="max-width: 800px; width: 90%;">
+            <div class="persona-header">
+                <h3 id="board-modal-title">新建板块</h3>
+                <button class="close-btn" onclick="closeBoardModal()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
             
-            <!-- Tabs: AI Wizard / Manual -->
-            <div id="board-mode-tabs" class="board-mode-tabs">
+            <div class="persona-body board-modal-body">
+                <!-- Tabs: AI Wizard / Manual -->
+                <div id="board-mode-tabs" class="board-mode-tabs">
                 <button type="button" class="board-mode-tab active" data-mode="wizard" onclick="switchBoardMode('wizard')">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.3rem;vertical-align:middle;"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg> AI 向导
                 </button>
@@ -433,6 +439,7 @@
                 <form class="wizard-input-row" onsubmit="submitWizard(event)">
                     <input id="wizard-input" type="text" placeholder="描述你的需求..." autocomplete="off">
                     <button type="submit" id="wizard-submit-btn" class="primary-btn">发送</button>
+                    <button type="button" class="secondary-btn" onclick="closeBoardModal()">取消</button>
                 </form>
                 <div id="wizard-apply-row" class="wizard-apply-row" style="display:none;">
                     <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> AI 已生成推荐配置</span>
@@ -445,97 +452,111 @@
                 <input type="hidden" id="board-is-edit" value="false">
                 <input type="hidden" id="board-original-slug" value="">
 
-                <div class="form-group">
-                    <label>标识符 (Slug) <small>只允许小写字母、数字、下划线和横线，唯一标识</small></label>
-                    <input type="text" id="board-slug" required pattern="[a-z0-9_\-]+" placeholder="e.g. english_learning">
-                </div>
-                <div class="form-group">
-                    <label>显示名称</label>
-                    <input type="text" id="board-name" required placeholder="e.g. 英语学习">
-                </div>
-                <div class="form-group">
-                    <label>图标 (Icon)</label>
-                    <input type="text" id="board-icon" required placeholder="e.g. ❖" value="❖">
-                </div>
-                <div class="form-group">
-                    <label>数据源类型</label>
-                    <select id="board-source-type" onchange="toggleBoardSourceConfig()">
-                        <option value="rss">RSS 订阅源</option>
-                        <option value="pure_llm">纯 LLM 生成 (无外部数据)</option>
-                        <option value="hackernews">Hacker News 热帖</option>
-                        <option value="reddit">Reddit 社区</option>
-                        <option value="github">GitHub 动态</option>
-                        <option value="multi">混合数据源</option>
-                    </select>
-                </div>
-
-                <div id="board-config-summary" class="board-config-summary" aria-live="polite"></div>
-
-                <!-- RSS Config -->
-                <div class="board-source-config" id="board-cfg-rss">
-                    <div class="form-group">
-                        <label>RSS 源地址 <small>每行一个</small></label>
-                        <textarea id="board-rss-feeds" placeholder="https://example.com/rss.xml"></textarea>
-                    </div>
-                </div>
-
-                <!-- Pure LLM Config -->
-                <div class="board-source-config" id="board-cfg-pure_llm" style="display:none;">
-                    <div class="form-group">
-                        <label>每日生成条数</label>
-                        <input type="number" id="board-llm-items" min="1" max="15" value="5" placeholder="5">
-                    </div>
-                    <div class="form-group">
-                        <label>风格描述 <small>可选</small></label>
-                        <input type="text" id="board-llm-style" placeholder="e.g. 轻松幽默、学术严谨...">
-                    </div>
-                </div>
-
-                <!-- HackerNews Config -->
-                <div class="board-source-config" id="board-cfg-hackernews" style="display:none;">
+                <div class="form-section">
+                    <h4><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg> 基本信息</h4>
                     <div class="form-group-row">
                         <div class="form-group">
-                            <label>抓取热帖数</label>
-                            <input type="number" id="board-hn-top" min="1" max="100" value="30">
+                            <label>显示名称</label>
+                            <input type="text" id="board-name" required placeholder="e.g. 英语学习">
                         </div>
                         <div class="form-group">
-                            <label>最低分数</label>
-                            <input type="number" id="board-hn-score" min="0" value="100">
+                            <label>标识符 (Slug) <small>字母/数字/横线</small></label>
+                            <input type="text" id="board-slug" required pattern="[a-z0-9_\-]+" placeholder="e.g. english_learning">
+                        </div>
+                    </div>
+                    <div class="form-group-row">
+                        <div class="form-group">
+                            <label>图标 (Icon)</label>
+                            <input type="text" id="board-icon" required placeholder="e.g. ❖" value="❖">
+                        </div>
+                        <div class="form-group">
+                            <label>数据源类型</label>
+                            <select id="board-source-type" onchange="toggleBoardSourceConfig()">
+                                <option value="rss">RSS 订阅源</option>
+                                <option value="pure_llm">纯 LLM 生成 (无外部数据)</option>
+                                <option value="hackernews">Hacker News 热帖</option>
+                                <option value="reddit">Reddit 社区</option>
+                                <option value="github">GitHub 动态</option>
+                                <option value="multi">混合数据源</option>
+                            </select>
                         </div>
                     </div>
                 </div>
 
-                <!-- Reddit Config -->
-                <div class="board-source-config" id="board-cfg-reddit" style="display:none;">
-                    <div class="form-group">
-                        <label>Subreddits <small>每行一个，格式: 名称 [排序 [最低分]]，如: LocalLLaMA hot 50</small></label>
-                        <textarea id="board-reddit-subs" placeholder="LocalLLaMA hot 50&#10;programming top 20"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label>抓取评论数 <small>每帖</small></label>
-                        <input type="number" id="board-reddit-comments" min="0" max="25" value="5">
-                    </div>
-                </div>
+                <div class="form-section">
+                    <h4><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg> 数据源配置</h4>
+                    <div id="board-config-summary" class="board-config-summary" aria-live="polite" style="margin-bottom: 1rem;"></div>
 
-                <!-- GitHub Config -->
-                <div class="board-source-config" id="board-cfg-github" style="display:none;">
-                    <div class="form-group">
-                        <label>追踪仓库 <small>每行一个，格式: owner/repo</small></label>
-                        <textarea id="board-github-repos" placeholder="openai/whisper&#10;langchain-ai/langchain"></textarea>
+                    <!-- RSS Config -->
+                    <div class="board-source-config" id="board-cfg-rss">
+                        <div class="form-group">
+                            <label>RSS 源地址 <small>每行一个</small></label>
+                            <textarea id="board-rss-feeds" placeholder="https://example.com/rss.xml"></textarea>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>追踪用户 <small>每行一个 GitHub 用户名</small></label>
-                        <textarea id="board-github-users" placeholder="torvalds"></textarea>
-                    </div>
-                </div>
 
-                <!-- Multi Source Config -->
-                <div class="board-source-config" id="board-cfg-multi" style="display:none;">
-                    <div class="form-group">
-                        <label>混合数据源配置 <small>JSON 格式</small></label>
-                        <textarea id="board-multi-json" style="height:150px; font-family:monospace; font-size:0.85rem;" placeholder='{"rss": {"feeds": ["..."]}, "hackernews": {"min_score": 100}}'></textarea>
+                    <!-- Pure LLM Config -->
+                    <div class="board-source-config" id="board-cfg-pure_llm" style="display:none;">
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>每日生成条数</label>
+                                <input type="number" id="board-llm-items" min="1" max="15" value="5" placeholder="5">
+                            </div>
+                            <div class="form-group">
+                                <label>风格描述 <small>可选</small></label>
+                                <input type="text" id="board-llm-style" placeholder="e.g. 轻松幽默、学术严谨...">
+                            </div>
+                        </div>
                     </div>
-                    <p class="form-hint">可用的子源类型: rss, hackernews, reddit, github, pure_llm</p>
+
+                    <!-- HackerNews Config -->
+                    <div class="board-source-config" id="board-cfg-hackernews" style="display:none;">
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>抓取热帖数</label>
+                                <input type="number" id="board-hn-top" min="1" max="100" value="30">
+                            </div>
+                            <div class="form-group">
+                                <label>最低分数</label>
+                                <input type="number" id="board-hn-score" min="0" value="100">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reddit Config -->
+                    <div class="board-source-config" id="board-cfg-reddit" style="display:none;">
+                        <div class="form-group">
+                            <label>Subreddits <small>每行一个，如: LocalLLaMA hot 50</small></label>
+                            <textarea id="board-reddit-subs" placeholder="LocalLLaMA hot 50&#10;programming top 20" style="height: 60px;"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>抓取评论数 <small>每帖</small></label>
+                            <input type="number" id="board-reddit-comments" min="0" max="25" value="5">
+                        </div>
+                    </div>
+
+                    <!-- GitHub Config -->
+                    <div class="board-source-config" id="board-cfg-github" style="display:none;">
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>追踪仓库 <small>每行 owner/repo</small></label>
+                                <textarea id="board-github-repos" placeholder="openai/whisper&#10;langchain-ai/langchain" style="height: 60px;"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>追踪用户 <small>每行用户名</small></label>
+                                <textarea id="board-github-users" placeholder="torvalds" style="height: 60px;"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Multi Source Config -->
+                    <div class="board-source-config" id="board-cfg-multi" style="display:none;">
+                        <div class="form-group">
+                            <label>混合数据源配置 <small>JSON 格式</small></label>
+                            <textarea id="board-multi-json" style="height:120px; font-family:monospace; font-size:0.85rem;" placeholder='{"rss": {"feeds": ["..."]}, "hackernews": {"min_score": 100}}'></textarea>
+                        </div>
+                        <p class="form-hint">可用的子源类型: rss, hackernews, reddit, github, pure_llm</p>
+                    </div>
                 </div>
 
                 <!-- Advanced Configuration Section -->
@@ -546,44 +567,46 @@
                 </div>
                 
                 <div id="board-advanced-settings" class="board-advanced-settings" style="display:none;">
-                    <div class="form-group">
-                        <label>提示词模板 (Prompt Key) <small>选择预设模板</small></label>
-                        <select id="board-prompt-key">
-                            <option value="daily_briefing">daily_briefing (默认)</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label>自定义系统提示词 <small>覆盖默认指令</small></label>
-                        <textarea id="board-prompt" placeholder="给 AI 的系统级指令，例如：你是一个英语老师..."></textarea>
-                    </div>
-
-                    <div class="form-group-row">
-                        <div class="form-group">
-                            <label>定时调度 (Schedule) <small>cron 表达式，如 08:00</small></label>
-                            <input type="text" id="board-schedule" placeholder="留空使用全局配置">
+                    <div class="form-section">
+                        <h4><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> 深入定制</h4>
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>提示词模板 (Prompt Key) <small>预设模板</small></label>
+                                <select id="board-prompt-key">
+                                    <option value="daily_briefing">daily_briefing (默认)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>输出语言 <small>简报/周报</small></label>
+                                <select id="board-output-language">
+                                    <option value="auto">自动 (跟随源文)</option>
+                                    <option value="zh">中文</option>
+                                    <option value="en">English</option>
+                                </select>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>通知渠道 <small>逗号分隔，如 email,webhook</small></label>
-                            <input type="text" id="board-notify" placeholder="留空使用全部已配置渠道">
-                        </div>
-                    </div>
 
-                    <div class="form-group-row">
                         <div class="form-group">
-                            <label>输出语言 <small>控制简报/周报/补读的输出语言</small></label>
-                            <select id="board-output-language">
-                                <option value="auto">自动 (跟随源文)</option>
-                                <option value="zh">中文</option>
-                                <option value="en">English</option>
-                            </select>
+                            <label>自定义系统提示词 <small>覆盖默认指令</small></label>
+                            <textarea id="board-prompt" placeholder="给 AI 的系统级指令，例如：你是一个英语老师..." style="height: 60px;"></textarea>
                         </div>
-                    </div>
 
-                    <div class="form-group">
-                        <label>多视角 (Perspectives) <small>JSON 格式，如 {"active":["technical","business"]}</small></label>
-                        <textarea id="board-perspectives" style="height:60px; font-family:monospace; font-size:0.85rem;" placeholder='{"active": ["overview"]}'></textarea>
-                        <p class="form-hint">留空则为单视角模式</p>
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>定时调度 (Schedule) <small>cron 表达式</small></label>
+                                <input type="text" id="board-schedule" placeholder="留空使用全局配置">
+                            </div>
+                            <div class="form-group">
+                                <label>通知渠道 <small>逗号分隔如 email</small></label>
+                                <input type="text" id="board-notify" placeholder="留空使用全部">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>多视角 (Perspectives) <small>JSON 格式</small></label>
+                            <textarea id="board-perspectives" style="height:60px; font-family:monospace; font-size:0.85rem;" placeholder='{"active": ["overview"]}'></textarea>
+                            <p class="form-hint">留空则为单视角模式</p>
+                        </div>
                     </div>
                 </div>
 
@@ -606,10 +629,7 @@
                 <p id="board-preview-hint" class="board-preview-result__hint">当前试运行会基于表单里的最新配置，不会自动保存到数据库。</p>
                 <div id="board-preview-content" class="board-preview-content"></div>
             </div>
-
-            <!-- Footer when wizard is active -->
-            <div id="board-wizard-footer" class="modal-btns" style="margin-top: 1rem;">
-                <button type="button" class="secondary-btn" onclick="closeBoardModal()">取消</button>
+            
             </div>
         </div>
     </div>
@@ -634,6 +654,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/static/app.js?v=10"></script>
+    <script src="/static/app.js?v=11"></script>
 </body>
 </html>

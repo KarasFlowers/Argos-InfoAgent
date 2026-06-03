@@ -3,6 +3,8 @@ let currentUrl = null;
 let isIngesting = false;
 let currentQueryController = null;
 let currentOverviewController = null;
+let _summaryAbortController = null;
+let _summaryFetchId = 0;
 let latestHistoryArchive = [];
 let historyViewStatus = {};  // date -> viewed_at | null
 let currentBoardSlug = null;
@@ -353,7 +355,7 @@ function renderBoardTabs() {
         const b = availableBoards[i];
         const isActive = b.slug === currentBoardSlug ? 'active' : '';
         html += `<div class="board-tab-wrapper ${isActive}" draggable="true" data-slug="${b.slug}" data-index="${i}">
-            <button class="board-tab" onclick="switchBoard('${b.slug}')">
+            <button class="board-tab ${isActive}" onclick="switchBoard('${b.slug}')">
                 ${b.icon} ${b.name}
             </button>
             <button class="board-edit-btn" onclick="openBoardModal('${b.slug}')" title="设置此板块">⚙️</button>
@@ -447,6 +449,11 @@ function switchBoard(slug) {
     const cached = _loadCachedSummary();
     if (cached) {
         _renderSummaryData(cached);
+    } else {
+        // No cache — immediately show loading so user sees the switch happened
+        const contentState = document.getElementById('content-state');
+        if (contentState) contentState.style.display = 'none';
+        showLoadingState();
     }
     fetchSummary();
 }
@@ -458,6 +465,8 @@ function switchBoard(slug) {
 let wizardMessages = [];           // conversation history
 let wizardLastConfig = null;       // most recent suggested config
 let wizardIsLoading = false;
+let wizardTopic = '';              // derived topic for feed-fix requests
+let wizardBrokenFeeds = new Set(); // broken feed URLs not yet replaced
 
 async function loadPromptTemplates() {
     try {
@@ -1027,15 +1036,12 @@ function switchBoardMode(mode) {
     });
     const wizardPanel = document.getElementById('board-wizard-panel');
     const form = document.getElementById('board-form');
-    const wizardFooter = document.getElementById('board-wizard-footer');
     if (mode === 'wizard') {
         wizardPanel.style.display = 'block';
         form.style.display = 'none';
-        wizardFooter.style.display = 'flex';
     } else {
         wizardPanel.style.display = 'none';
         form.style.display = 'block';
-        wizardFooter.style.display = 'none';
         renderBoardConfigSummary();
     }
 }
@@ -1044,6 +1050,8 @@ function resetWizard() {
     wizardMessages = [];
     wizardLastConfig = null;
     wizardIsLoading = false;
+    wizardTopic = '';
+    wizardBrokenFeeds = new Set();
     const messagesDiv = document.getElementById('wizard-messages');
     if (messagesDiv) {
         messagesDiv.innerHTML = `<div class="wizard-msg wizard-msg--ai">告诉我你想要一个什么样的板块，比如：<br>"我想每天学 5 个英语商务单词"，<br>"汇总国内外顶级 AI 实验室的最新论文"，<br>"每天给我一条冷门心理学知识"...</div>`;
@@ -1107,14 +1115,15 @@ async function submitWizard(event) {
 
         if (data.ready && data.config) {
             wizardLastConfig = data.config;
+            // Derive a topic string for later feed-fix requests.
+            wizardTopic = `${data.config.name || ''} ${data.config.system_prompt || ''}`.trim();
             // Summary preview
             const cfg = data.config;
             const typeLabels = { rss: 'RSS 订阅源', pure_llm: '纯 LLM 生成', hackernews: 'Hacker News', reddit: 'Reddit', github: 'GitHub', multi: '混合数据源' };
             const sc = cfg.source_config || {};
+            const isRss = cfg.source_type === 'rss' && Array.isArray(sc.feeds) && sc.feeds.length > 0;
             let sourceDetail = '';
-            if (cfg.source_type === 'rss' && sc.feeds && sc.feeds.length > 0) {
-                sourceDetail = `- 源：\n${sc.feeds.map(u => '  - ' + u).join('\n')}`;
-            } else if (cfg.source_type === 'reddit' && sc.subreddits) {
+            if (cfg.source_type === 'reddit' && sc.subreddits) {
                 sourceDetail = `- Subreddits: ${sc.subreddits.map(s => s.subreddit || s).join(', ')}`;
             } else if (cfg.source_type === 'github') {
                 const parts = [];
@@ -1128,6 +1137,16 @@ async function submitWizard(event) {
 - 类型：${typeLabels[cfg.source_type] || cfg.source_type}
 ${sourceDetail}`;
             appendWizardMsg('ai', preview);
+
+            // RSS feeds: render per-URL validation status and auto-fix broken ones.
+            if (isRss) {
+                const validation = Array.isArray(data.feed_validation) ? data.feed_validation : null;
+                renderWizardFeedStatus(sc.feeds, validation);
+                if (validation && validation.some(v => !v.ok)) {
+                    const broken = validation.filter(v => !v.ok).map(v => v.url);
+                    fixWizardFeeds(broken);
+                }
+            }
             document.getElementById('wizard-apply-row').style.display = 'flex';
         } else {
             wizardLastConfig = null;
@@ -1144,9 +1163,134 @@ ${sourceDetail}`;
     }
 }
 
+function renderWizardFeedStatus(feeds, validation) {
+    const container = document.getElementById('wizard-messages');
+    const byUrl = {};
+    (validation || []).forEach(v => { byUrl[v.url] = v; });
+
+    // Track broken feeds so applyWizardConfig can drop unresolved ones.
+    wizardBrokenFeeds = new Set(
+        (validation || []).filter(v => !v.ok).map(v => v.url)
+    );
+
+    const card = document.createElement('div');
+    card.className = 'wizard-msg wizard-msg--ai wizard-feed-status';
+    const title = document.createElement('div');
+    title.className = 'wizard-feed-title';
+    title.textContent = 'RSS 源检测结果';
+    card.appendChild(title);
+
+    feeds.forEach(url => {
+        const v = byUrl[url];
+        const row = document.createElement('div');
+        let state = 'pending', icon = '…', meta = '检测中';
+        if (v && v.ok) { state = 'ok'; icon = '✓'; meta = `${v.article_count}篇`; }
+        else if (v) { state = 'fail'; icon = '✗'; meta = v.error || '失败'; }
+        row.className = `wizard-feed-row wizard-feed-row--${state}`;
+        const iconEl = document.createElement('span');
+        iconEl.className = 'wizard-feed-icon';
+        iconEl.textContent = icon;
+        const urlEl = document.createElement('span');
+        urlEl.className = 'wizard-feed-url';
+        urlEl.textContent = url;
+        const metaEl = document.createElement('span');
+        metaEl.className = 'wizard-feed-meta';
+        metaEl.textContent = meta;
+        row.append(iconEl, urlEl, metaEl);
+        card.appendChild(row);
+    });
+    container.appendChild(card);
+    container.scrollTop = container.scrollHeight;
+    return card;
+}
+
+async function fixWizardFeeds(brokenUrls) {
+    const loading = appendWizardMsg('ai', `🔧 正在为 ${brokenUrls.length} 个失效源寻找可用替代...`);
+    try {
+        const res = await fetch('/api/v1/boards/wizard/fix-feeds', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ topic: wizardTopic || '通用资讯', broken_urls: brokenUrls }),
+        });
+        loading.remove();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderWizardAlternatives(Array.isArray(data.alternatives) ? data.alternatives : []);
+    } catch (e) {
+        loading.remove();
+        appendWizardMsg('ai', `⚠️ 替代源获取失败：${e.message}。你可以稍后在「信息源管理」里手动调整。`);
+    }
+}
+
+function renderWizardAlternatives(alternatives) {
+    const container = document.getElementById('wizard-messages');
+    const hasAny = alternatives.some(a => (a.suggestions || []).some(s => s.ok));
+    if (!hasAny) {
+        appendWizardMsg('ai', '未能找到可用的替代源，失效源在应用时会被自动移除，你可稍后手动补充。');
+        return;
+    }
+
+    alternatives.forEach(alt => {
+        const usable = (alt.suggestions || []).filter(s => s.ok);
+        if (usable.length === 0) return;
+
+        const card = document.createElement('div');
+        card.className = 'wizard-msg wizard-msg--ai wizard-alt-card';
+        const head = document.createElement('div');
+        head.className = 'wizard-alt-head';
+        const orig = document.createElement('span');
+        orig.className = 'wizard-alt-original';
+        orig.textContent = alt.original;
+        head.append(document.createTextNode('❌ '), orig, document.createTextNode(' 的替代建议：'));
+        card.appendChild(head);
+
+        usable.forEach(s => {
+            const row = document.createElement('div');
+            row.className = 'wizard-alt-row';
+            const info = document.createElement('span');
+            info.className = 'wizard-alt-info';
+            info.textContent = `✓ ${s.url} (${s.article_count}篇)`;
+            const btn = document.createElement('button');
+            btn.className = 'wizard-alt-accept-btn';
+            btn.textContent = '采用';
+            btn.addEventListener('click', () => acceptWizardAlternative(alt.original, s.url, row, card));
+            row.append(info, btn);
+            card.appendChild(row);
+        });
+        container.appendChild(card);
+    });
+    container.scrollTop = container.scrollHeight;
+}
+
+function acceptWizardAlternative(originalUrl, newUrl, rowEl, cardEl) {
+    if (!wizardLastConfig || !wizardLastConfig.source_config) return;
+    const feeds = wizardLastConfig.source_config.feeds || [];
+    const idx = feeds.indexOf(originalUrl);
+    if (idx !== -1) {
+        feeds[idx] = newUrl;
+    } else if (!feeds.includes(newUrl)) {
+        feeds.push(newUrl);
+    }
+    wizardLastConfig.source_config.feeds = feeds;
+    // This original is now resolved — remove it from the broken set.
+    wizardBrokenFeeds.delete(originalUrl);
+
+    // Lock this card's buttons and mark accepted row.
+    cardEl.querySelectorAll('.wizard-alt-accept-btn').forEach(b => { b.disabled = true; });
+    rowEl.classList.add('wizard-alt-row--accepted');
+    const tag = document.createElement('span');
+    tag.className = 'wizard-alt-accepted-tag';
+    tag.textContent = '已采用';
+    rowEl.appendChild(tag);
+}
+
 function applyWizardConfig() {
     if (!wizardLastConfig) return;
     const cfg = wizardLastConfig;
+    // Drop any RSS feeds still known to be broken and not replaced.
+    if (cfg.source_type === 'rss' && cfg.source_config && Array.isArray(cfg.source_config.feeds) && wizardBrokenFeeds.size) {
+        cfg.source_config.feeds = cfg.source_config.feeds.filter(u => !wizardBrokenFeeds.has(u));
+    }
     document.getElementById('board-slug').value = cfg.slug || '';
     document.getElementById('board-slug').disabled = false;
     document.getElementById('board-name').value = cfg.name || '';
@@ -1607,6 +1751,13 @@ function _renderSummaryData(data) {
 }
 
 async function fetchSummaryWithUrl(url) {
+    // Cancel any in-flight summary fetch (prevents stale board data flickering)
+    if (_summaryAbortController) {
+        _summaryAbortController.abort();
+    }
+    _summaryAbortController = new AbortController();
+    const thisFetchId = ++_summaryFetchId;
+
     const loadingState = document.getElementById('loading-state');
     const contentState = document.getElementById('content-state');
     const refreshBtn = document.getElementById('refresh-btn');
@@ -1620,18 +1771,23 @@ async function fetchSummaryWithUrl(url) {
             if (refreshBtn) refreshBtn.style.display = 'none';
         }
 
-        const response = await fetch(url);
+        const response = await fetch(url, { signal: _summaryAbortController.signal });
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
 
         const data = await response.json();
+
+        // Discard response if a newer fetch has been started (board switched)
+        if (thisFetchId !== _summaryFetchId) return;
+
         _renderSummaryData(data);
         _saveCachedSummary(data);
     } catch (error) {
+        if (error.name === 'AbortError') return; // cancelled by newer fetch — ignore
         console.error('Failed to fetch summary:', error);
-        // Only show error state if we have no cached data to fall back on
-        if (!hasCachedData) {
+        // Only show error state if this is still the latest fetch and we have no cached data
+        if (thisFetchId === _summaryFetchId && !hasCachedData) {
             showErrorState(error.message, () => fetchSummary());
         }
     }
@@ -2485,41 +2641,25 @@ async function triggerWeeklyInsight() {
 
     genBtn.style.opacity = '0.5';
     genBtn.disabled = true;
-    genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 深度复盘中...';
+    genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 汇总生成中...';
     
     clearElement(content);
+    const loadingMsg = document.createElement('p');
     loadingMsg.className = 'generating-text';
     loadingMsg.id = 'insight-loading-status';
-    loadingMsg.textContent = 'Wired 主编正在策划本周特稿';
+    loadingMsg.textContent = 'AI 正在提炼本周技术动态，请稍候...';
     content.appendChild(loadingMsg);
-
-    const statuses = [
-        '正在分析本周技术趋势',
-        '正在梳理行业权力版图',
-        '正在撰写叙事导读',
-        '主编正在进行最后润色'
-    ];
-    
-    let statusIndex = 0;
-    const interval = setInterval(() => {
-        if (statusIndex < statuses.length) {
-            loadingMsg.textContent = statuses[statusIndex];
-            statusIndex++;
-        }
-    }, 2500);
 
     try {
         let url = '/api/v1/history/weekly_insight';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const response = await fetch(url);
-        clearInterval(interval);
         
         if (!response.ok) throw new Error('Generation failed');
         
         const data = await response.json();
         
         clearElement(content);
-        wrapper.classList.remove('generating-insight');
         
         if (typeof marked !== 'undefined') {
             content.innerHTML = marked.parse(data.weekly_insight);
@@ -2528,11 +2668,10 @@ async function triggerWeeklyInsight() {
         }
 
     } catch (error) {
-        clearInterval(interval);
         clearElement(content);
         genBtn.style.opacity = '1';
         genBtn.disabled = false;
-        genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 生成本周深读 (Wired Style)';
+        genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 生成本周深度汇总';
         
         const err = document.createElement('p');
         err.className = 'error-message';
@@ -3787,7 +3926,7 @@ async function testExistingFeed(index, url) {
             statusEl.title = data.feed_title;
         } else {
             statusEl.className = 'source-feed-status status-fail';
-            statusEl.textContent = '✗ 失败';
+            statusEl.textContent = `✗ ${data.error || '失败'}`;
             statusEl.title = data.error;
         }
     } catch (e) {
