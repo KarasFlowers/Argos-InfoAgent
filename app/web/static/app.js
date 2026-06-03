@@ -464,6 +464,7 @@ function switchBoard(slug) {
 
 let wizardMessages = [];           // conversation history
 let wizardLastConfig = null;       // most recent suggested config
+let wizardLastSourceValidation = null; // most recent validation result
 let wizardIsLoading = false;
 let wizardTopic = '';              // derived topic for feed-fix requests
 let wizardBrokenFeeds = new Set(); // broken feed URLs not yet replaced
@@ -1049,6 +1050,7 @@ function switchBoardMode(mode) {
 function resetWizard() {
     wizardMessages = [];
     wizardLastConfig = null;
+    wizardLastSourceValidation = null;
     wizardIsLoading = false;
     wizardTopic = '';
     wizardBrokenFeeds = new Set();
@@ -1098,10 +1100,18 @@ async function submitWizard(event) {
     const loadingMsg = appendWizardMsg('ai', '🧠 正在为你设计板块...');
 
     try {
+        const payload = { messages: wizardMessages };
+        if (wizardLastConfig) {
+            payload.current_config = wizardLastConfig;
+        }
+        if (wizardLastSourceValidation) {
+            payload.source_validation = wizardLastSourceValidation;
+        }
+
         const res = await fetch('/api/v1/boards/wizard', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: wizardMessages }),
+            body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -1115,6 +1125,7 @@ async function submitWizard(event) {
 
         if (data.ready && data.config) {
             wizardLastConfig = data.config;
+            wizardLastSourceValidation = data.source_validation || null;
             // Derive a topic string for later feed-fix requests.
             wizardTopic = `${data.config.name || ''} ${data.config.system_prompt || ''}`.trim();
             // Summary preview
@@ -1138,18 +1149,22 @@ async function submitWizard(event) {
 ${sourceDetail}`;
             appendWizardMsg('ai', preview);
 
-            // RSS feeds: render per-URL validation status and auto-fix broken ones.
-            if (isRss) {
-                const validation = Array.isArray(data.feed_validation) ? data.feed_validation : null;
-                renderWizardFeedStatus(sc.feeds, validation);
-                if (validation && validation.some(v => !v.ok)) {
-                    const broken = validation.filter(v => !v.ok).map(v => v.url);
-                    fixWizardFeeds(broken);
+            // RSS/Multi feeds: render per-URL validation status
+            if (wizardLastSourceValidation && wizardLastSourceValidation.length > 0) {
+                renderWizardSourceStatus(wizardLastSourceValidation);
+                
+                // For RSS: trigger auto-fix if any feeds are broken
+                if (isRss) {
+                    const broken = wizardLastSourceValidation.filter(v => v.source_type === 'rss' && !v.ok).map(v => v.url);
+                    if (broken.length > 0) {
+                        fixWizardFeeds(broken);
+                    }
                 }
             }
             document.getElementById('wizard-apply-row').style.display = 'flex';
         } else {
             wizardLastConfig = null;
+            wizardLastSourceValidation = null;
             document.getElementById('wizard-apply-row').style.display = 'none';
         }
     } catch (e) {
@@ -1163,45 +1178,143 @@ ${sourceDetail}`;
     }
 }
 
-function renderWizardFeedStatus(feeds, validation) {
+function renderWizardSourceStatus(validation) {
     const container = document.getElementById('wizard-messages');
-    const byUrl = {};
-    (validation || []).forEach(v => { byUrl[v.url] = v; });
 
-    // Track broken feeds so applyWizardConfig can drop unresolved ones.
+    // Track broken RSS feeds so applyWizardConfig can drop unresolved ones.
     wizardBrokenFeeds = new Set(
-        (validation || []).filter(v => !v.ok).map(v => v.url)
+        (validation || []).filter(v => v.source_type === 'rss' && !v.ok).map(v => v.url)
     );
 
     const card = document.createElement('div');
     card.className = 'wizard-msg wizard-msg--ai wizard-feed-status';
     const title = document.createElement('div');
     title.className = 'wizard-feed-title';
-    title.textContent = 'RSS 源检测结果';
+    title.textContent = '内容源状态';
     card.appendChild(title);
 
-    feeds.forEach(url => {
-        const v = byUrl[url];
+    validation.forEach(v => {
         const row = document.createElement('div');
         let state = 'pending', icon = '…', meta = '检测中';
-        if (v && v.ok) { state = 'ok'; icon = '✓'; meta = `${v.article_count}篇`; }
-        else if (v) { state = 'fail'; icon = '✗'; meta = v.error || '失败'; }
+        if (v && v.ok) {
+            state = 'ok'; icon = '✓';
+            meta = v.source_type === 'pure_llm' ? 'AI 原创内容，无需抓取' : '正常';
+        } else if (v) { state = 'fail'; icon = '✗'; meta = v.error || '失败'; }
         row.className = `wizard-feed-row wizard-feed-row--${state}`;
+        
+        const typeEl = document.createElement('span');
+        typeEl.className = 'wizard-feed-type';
+        typeEl.textContent = `[${v.source_type}]`;
+        typeEl.style.color = 'var(--text-secondary)';
+        typeEl.style.fontSize = '0.7rem';
+        typeEl.style.marginRight = '0.3rem';
+
         const iconEl = document.createElement('span');
         iconEl.className = 'wizard-feed-icon';
         iconEl.textContent = icon;
+        
         const urlEl = document.createElement('span');
         urlEl.className = 'wizard-feed-url';
-        urlEl.textContent = url;
+        urlEl.textContent = v.label || v.url;
+        
         const metaEl = document.createElement('span');
         metaEl.className = 'wizard-feed-meta';
         metaEl.textContent = meta;
-        row.append(iconEl, urlEl, metaEl);
+        
+        row.append(iconEl, typeEl, urlEl, metaEl);
         card.appendChild(row);
     });
+
+    const previewRow = document.createElement('div');
+    previewRow.style.marginTop = '0.8rem';
+    previewRow.style.display = 'flex';
+    previewRow.style.justifyContent = 'space-between';
+    previewRow.style.alignItems = 'center';
+    
+    const isPureLlm = (wizardLastConfig || {}).source_type === 'pure_llm';
+    const previewBtn = document.createElement('button');
+    previewBtn.className = 'btn btn-secondary';
+    previewBtn.style.fontSize = '0.8rem';
+    previewBtn.style.padding = '0.3rem 0.6rem';
+    previewBtn.innerHTML = '📊 预览抓取效果';
+    previewBtn.onclick = () => triggerWizardPreview(previewBtn);
+    if (isPureLlm) previewBtn.style.display = 'none';
+    
+    const hint = document.createElement('span');
+    hint.style.fontSize = '0.75rem';
+    hint.style.color = 'var(--text-secondary)';
+    hint.textContent = isPureLlm
+        ? '纯 LLM 内容无需抓取，直接打字告诉我想调整什么（比如"换个风格""增加条数"）'
+        : '对效果不满意？直接打字告诉我怎么改（比如"多加点技术源"）';
+
+    previewRow.append(previewBtn, hint);
+    card.appendChild(previewRow);
+
     container.appendChild(card);
     container.scrollTop = container.scrollHeight;
     return card;
+}
+
+async function triggerWizardPreview(btn) {
+    if (!wizardLastConfig) return;
+    btn.disabled = true;
+    btn.textContent = '抓取中...';
+    
+    const container = document.getElementById('wizard-messages');
+    const loadingMsg = appendWizardMsg('ai', '📊 正在测试抓取，请稍候...');
+    
+    try {
+        const res = await fetch('/api/v1/boards/wizard/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config: wizardLastConfig }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        loadingMsg.remove();
+        
+        const card = document.createElement('div');
+        card.className = 'wizard-msg wizard-msg--ai wizard-feed-status';
+        
+        const title = document.createElement('div');
+        title.className = 'wizard-feed-title';
+        title.textContent = `预览结果: 共抓取 ${data.total_articles || 0} 篇文章`;
+        card.appendChild(title);
+
+        (data.sources || []).forEach(v => {
+            const row = document.createElement('div');
+            row.style.marginBottom = '0.5rem';
+            
+            const head = document.createElement('div');
+            head.className = `wizard-feed-row wizard-feed-row--${v.ok ? 'ok' : 'fail'}`;
+            head.innerHTML = `
+                <span class="wizard-feed-icon">${v.ok ? '✓' : '✗'}</span>
+                <span style="color:var(--text-secondary);font-size:0.7rem;margin-right:0.3rem;">[${v.source_type}]</span>
+                <span class="wizard-feed-url">${escapeHtml(v.label || v.url)}</span>
+                <span class="wizard-feed-meta">${v.ok ? (v.source_type === 'pure_llm' ? 'AI 原创内容' : (v.article_count + '篇')) : escapeHtml(v.error)}</span>
+            `;
+            row.appendChild(head);
+            
+            if (v.ok && v.sample_titles && v.sample_titles.length > 0) {
+                const samples = document.createElement('div');
+                samples.style.paddingLeft = '1.5rem';
+                samples.style.fontSize = '0.75rem';
+                samples.style.color = 'var(--text-secondary)';
+                samples.innerHTML = v.sample_titles.map(t => `• ${escapeHtml(t)}`).join('<br>');
+                row.appendChild(samples);
+            }
+            card.appendChild(row);
+        });
+        
+        container.appendChild(card);
+        container.scrollTop = container.scrollHeight;
+    } catch (e) {
+        loadingMsg.remove();
+        appendWizardMsg('ai', `❌ 预览失败：${e.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '📊 重新预览';
+    }
 }
 
 async function fixWizardFeeds(brokenUrls) {
@@ -1262,16 +1375,28 @@ function renderWizardAlternatives(alternatives) {
     container.scrollTop = container.scrollHeight;
 }
 
+function _getWizardRssFeeds() {
+    if (!wizardLastConfig || !wizardLastConfig.source_config) return null;
+    const sc = wizardLastConfig.source_config;
+    if (wizardLastConfig.source_type === 'multi') {
+        const rssGroup = (sc.sources || {}).rss;
+        if (!rssGroup) return null;
+        if (!rssGroup.feeds) rssGroup.feeds = [];
+        return rssGroup.feeds;
+    }
+    if (!sc.feeds) sc.feeds = [];
+    return sc.feeds;
+}
+
 function acceptWizardAlternative(originalUrl, newUrl, rowEl, cardEl) {
-    if (!wizardLastConfig || !wizardLastConfig.source_config) return;
-    const feeds = wizardLastConfig.source_config.feeds || [];
+    const feeds = _getWizardRssFeeds();
+    if (!feeds) return;
     const idx = feeds.indexOf(originalUrl);
     if (idx !== -1) {
         feeds[idx] = newUrl;
     } else if (!feeds.includes(newUrl)) {
         feeds.push(newUrl);
     }
-    wizardLastConfig.source_config.feeds = feeds;
     // This original is now resolved — remove it from the broken set.
     wizardBrokenFeeds.delete(originalUrl);
 
@@ -1288,8 +1413,16 @@ function applyWizardConfig() {
     if (!wizardLastConfig) return;
     const cfg = wizardLastConfig;
     // Drop any RSS feeds still known to be broken and not replaced.
-    if (cfg.source_type === 'rss' && cfg.source_config && Array.isArray(cfg.source_config.feeds) && wizardBrokenFeeds.size) {
-        cfg.source_config.feeds = cfg.source_config.feeds.filter(u => !wizardBrokenFeeds.has(u));
+    if (wizardBrokenFeeds.size) {
+        const feeds = _getWizardRssFeeds();
+        if (feeds && Array.isArray(feeds)) {
+            const filtered = feeds.filter(u => !wizardBrokenFeeds.has(u));
+            if (cfg.source_type === 'multi') {
+                cfg.source_config.sources.rss.feeds = filtered;
+            } else {
+                cfg.source_config.feeds = filtered;
+            }
+        }
     }
     document.getElementById('board-slug').value = cfg.slug || '';
     document.getElementById('board-slug').disabled = false;
