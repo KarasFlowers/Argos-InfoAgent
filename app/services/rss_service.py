@@ -37,7 +37,8 @@ async def fetch_and_parse_feed(url: str, client: httpx.AsyncClient) -> RSSRespon
         await _log_health(url, status="ok", status_code=response.status_code, response_time_ms=elapsed_ms)
         
         # Parse the XML using feedparser
-        feed = feedparser.parse(response.text)
+        # Pass raw bytes so feedparser can detect encoding from XML declaration
+        feed = feedparser.parse(response.content)
         
         if not feed.entries:
             logger.warning(f"No entries found for {url}")

@@ -1,6 +1,7 @@
 import asyncio
 import html as html_mod
 import logging
+import ssl
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -306,41 +307,67 @@ class TestFeedRequest(BaseModel):
     url: str = Field(min_length=5, max_length=2048)
 
 
-@api_router.post("/sources/test")
-async def test_source_feed(payload: TestFeedRequest):
+async def _test_single_feed(url: str, timeout: float = 15.0) -> dict:
     """
-    Test a single RSS feed URL. Returns status, article count, and sample titles.
-    Does NOT cache the result.
+    Test a single RSS feed URL. Returns a dict with:
+      {"url", "ok", "feed_title", "article_count", "sample_titles", "error"}
+    Does NOT cache the result. Never raises — failures are returned as ok=False.
     """
     import httpx
     import feedparser
 
-    url = payload.url.strip()
+    url = url.strip()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
     try:
-        async with httpx.AsyncClient(headers=headers) as client:
-            resp = await client.get(url, timeout=15.0, follow_redirects=True)
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+            resp = await client.get(url, timeout=timeout)
             resp.raise_for_status()
 
-        feed = feedparser.parse(resp.text)
+        # Pass raw bytes to feedparser so it can detect encoding from XML
+        # declaration; resp.text may mis-decode non-UTF-8 feeds.
+        feed = feedparser.parse(resp.content)
         entries = feed.entries or []
         feed_title = feed.feed.get("title", "Unknown Feed")
 
+        # Detect feed-level parse errors (e.g. bozo_exception)
+        if not entries and hasattr(feed, "bozo_exception"):
+            bozo_msg = str(feed.bozo_exception)[:120]
+            return {"url": url, "ok": False, "error": f"Feed 解析失败: {bozo_msg}"}
+
         return {
+            "url": url,
             "ok": True,
             "feed_title": feed_title,
             "article_count": len(entries),
             "sample_titles": [e.get("title", "Untitled") for e in entries[:5]],
         }
     except httpx.HTTPStatusError as e:
-        return {"ok": False, "error": f"HTTP {e.response.status_code}"}
+        return {"url": url, "ok": False, "error": f"HTTP {e.response.status_code}"}
     except httpx.TimeoutException:
-        return {"ok": False, "error": "请求超时 (15s)"}
+        return {"url": url, "ok": False, "error": f"请求超时 ({int(timeout)}s)"}
+    except httpx.ConnectError:
+        return {"url": url, "ok": False, "error": "连接失败，请检查URL是否正确"}
+    except ssl.SSLError as e:
+        return {"url": url, "ok": False, "error": f"SSL错误: {str(e)[:100]}"}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
+        return {"url": url, "ok": False, "error": str(e)[:200]}
+
+
+@api_router.post("/sources/test")
+async def test_source_feed(payload: TestFeedRequest):
+    """
+    Test a single RSS feed URL. Returns status, article count, and sample titles.
+    Does NOT cache the result.
+    """
+    return await _test_single_feed(payload.url)
 
 
 async def _resolve_board(session: AsyncSession, slug: str | None):
@@ -1000,16 +1027,87 @@ async def create_board(
     return _serialize_board(board)
 
 
+async def _validate_config_feeds(config: dict | None, timeout: float = 8.0) -> list[dict] | None:
+    """
+    If the wizard config is an RSS board with feeds, test each feed URL
+    concurrently and return a list of validation results. Returns None when
+    there is nothing to validate.
+    """
+    if not config or config.get("source_type") != "rss":
+        return None
+    source_config = config.get("source_config") or {}
+    feeds = [u for u in (source_config.get("feeds") or []) if isinstance(u, str) and u.strip()]
+    if not feeds:
+        return None
+    results = await asyncio.gather(
+        *[_test_single_feed(u, timeout=timeout) for u in feeds]
+    )
+    return list(results)
+
+
 @api_router.post("/boards/wizard")
 async def board_wizard(payload: BoardWizardRequest):
     """
     Interactive AI-guided wizard to help users configure a new board.
     Accepts a conversation history, returns a reply plus (when ready) a suggested config.
+    When the config is an RSS board, each feed URL is validated and the results
+    are attached under ``feed_validation``.
     """
     result = await llm_service.wizard_suggest_board(
         [m.model_dump() for m in payload.messages]
     )
+    if result.get("ready") and result.get("config"):
+        validation = await _validate_config_feeds(result["config"])
+        if validation is not None:
+            result["feed_validation"] = validation
     return result
+
+
+class FixFeedsRequest(BaseModel):
+    topic: str = Field(min_length=1, max_length=500)
+    broken_urls: list[str] = Field(min_length=1, max_length=10)
+
+
+@api_router.post("/boards/wizard/fix-feeds")
+async def wizard_fix_feeds(payload: FixFeedsRequest):
+    """
+    For each broken RSS URL, ask the LLM to propose alternative feeds for the
+    given topic, validate the candidates, and return them grouped by original.
+    """
+    broken = [u.strip() for u in payload.broken_urls if u and u.strip()]
+    if not broken:
+        return {"alternatives": []}
+
+    candidates = await llm_service.suggest_alternative_feeds(
+        topic=payload.topic,
+        broken_urls=broken,
+    )
+
+    # Validate all unique candidate URLs concurrently.
+    all_urls: list[str] = []
+    for group in candidates:
+        for url in group.get("suggestions", []):
+            if url not in all_urls:
+                all_urls.append(url)
+
+    validation_map: dict[str, dict] = {}
+    if all_urls:
+        results = await asyncio.gather(
+            *[_test_single_feed(u, timeout=8.0) for u in all_urls]
+        )
+        validation_map = {r["url"]: r for r in results}
+
+    alternatives = []
+    for group in candidates:
+        original = group.get("original", "")
+        suggestions = [
+            validation_map[url]
+            for url in group.get("suggestions", [])
+            if url in validation_map
+        ]
+        alternatives.append({"original": original, "suggestions": suggestions})
+
+    return {"alternatives": alternatives}
 
 
 @api_router.get("/boards/prompts/templates")
@@ -1154,7 +1252,7 @@ async def get_weekly_insight(
     session: AsyncSession = Depends(get_session)
 ):
     """
-    Generate a deep, Wired-style weekly consolidation from recent summaries.
+    Generate a deep, structured weekly consolidation from recent summaries.
     """
     safe_limit = max(1, min(limit, 10))
     board_obj = await _resolve_board(session, board)

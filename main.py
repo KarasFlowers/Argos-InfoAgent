@@ -11,7 +11,7 @@ from pathlib import Path
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -51,6 +51,10 @@ async def lifespan(app: FastAPI):
 
     # Pre-warm ChromaDB and load existing collections (no-op if RAG disabled)
     rag_service.init_chroma()
+
+    # Pre-load embedding models so first request doesn't pay the loading cost
+    if settings.RAG_ENABLED:
+        await asyncio.to_thread(rag_service.prewarm_models)
 
     # Start background ingest workers
     worker_tasks: list[asyncio.Task] = []
@@ -123,6 +127,11 @@ app.include_router(rag_router, prefix="/api/v1")  # RAG endpoints return 503 whe
 # Mount Static Files and Templates
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
