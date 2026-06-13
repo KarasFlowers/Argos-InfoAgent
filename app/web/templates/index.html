@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/index.css?v=25">
+    <link rel="stylesheet" href="/static/index.css?v=28">
     <script>
         // Apply theme before first paint to avoid flash of dark background
         try {
@@ -42,18 +42,6 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path><line x1="9" y1="10" x2="15" y2="10"></line><line x1="9" y1="14" x2="13" y2="14"></line></svg>
                     补读 <span id="catchup-badge" class="catchup-badge" style="display:none">0</span>
                 </button>
-                <button id="history-btn" class="back-btn" onclick="toggleHistoryPanel()" title="查看历史记录归档">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                    往日
-                </button>
-                <button id="insights-btn" class="back-btn" onclick="toggleInsightsPanel()" title="查看跨天话题洞察">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-                    洞察
-                </button>
-                <button id="sources-btn" class="back-btn" onclick="toggleSourcesPanel()" title="管理信息源">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                    信息源
-                </button>
                 <button id="saved-btn" class="back-btn" onclick="toggleSavedPanel()" title="我的收藏/稍后阅读">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
                     收藏
@@ -62,6 +50,22 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
                     统计
                 </button>
+                <div class="more-menu-wrapper">
+                    <button id="more-btn" class="back-btn" onclick="toggleMoreMenu(event)" title="更多功能">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+                        更多
+                    </button>
+                    <div id="more-menu" class="more-menu">
+                        <button class="more-menu-item" onclick="toggleHistoryPanel(); closeMoreMenu();">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            往日
+                        </button>
+                        <button class="more-menu-item" onclick="toggleSourcesPanel(); closeMoreMenu();">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            信息源
+                        </button>
+                    </div>
+                </div>
                 <button id="theme-toggle" class="back-btn" onclick="toggleTheme()" title="切换浅色/深色主题">
                     <svg id="theme-icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
                     <svg id="theme-icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
@@ -84,6 +88,10 @@
                     </button>
                 </div>
                 <div class="persona-body">
+                    <div class="persona-section">
+                        <h4>训练面板</h4>
+                        <div id="persona-training-summary" class="persona-training-summary"></div>
+                    </div>
                     <div class="persona-section">
                         <h4>长期偏好</h4>
                         <div id="persona-instructions" class="persona-list"></div>
@@ -137,24 +145,45 @@
             </div>
         </div>
 
-        <!-- History Modal (Archives Only) -->
+        <!-- History Modal (Archives + Insights) -->
         <div id="history-modal" class="modal-overlay" onclick="if(event.target === this) toggleHistoryPanel()">
             <div class="modal-content history-modal-content">
                 <div class="persona-header">
-                    <h3>历史简报归档</h3>
+                    <h3>往日</h3>
                     <button class="close-btn" onclick="toggleHistoryPanel()">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                 </div>
                 <div class="persona-section history-modal-body">
-                    <div class="history-filter-bar">
-                        <label class="history-filter-toggle">
-                            <input type="checkbox" id="history-unread-only" onchange="filterHistoryByViewed()">
-                            仅未读
-                        </label>
+                    <div class="history-tab-bar">
+                        <button class="history-tab active" data-tab="archive" onclick="switchHistoryTab('archive')">归档</button>
+                        <button class="history-tab" data-tab="insights" onclick="switchHistoryTab('insights')">洞察</button>
                     </div>
-                    <p class="history-hint">浏览近期已生成的归档，悬浮可查看摘要</p>
-                    <div id="history-list" class="history-list"></div>
+                    <div id="history-tab-archive" class="history-tab-content">
+                        <p class="history-hint">浏览近期已生成的归档，悬浮可查看摘要</p>
+                        <div id="history-list" class="history-list"></div>
+                    </div>
+                    <div id="history-tab-insights" class="history-tab-content" style="display:none;">
+                        <div class="insights-controls">
+                            <label>近 <select id="heatmap-days" onchange="fetchHeatmap()">
+                                <option value="7" selected>7</option>
+                                <option value="14">14</option>
+                                <option value="30">30</option>
+                            </select> 天话题热度</label>
+                        </div>
+                        <div id="heatmap-container" class="heatmap-container">
+                            <p class="heatmap-placeholder">切换到此标签页后加载</p>
+                        </div>
+                        <hr class="section-divider">
+                        <h4>实体时间线</h4>
+                        <div class="entity-search-bar">
+                            <input id="entity-input" type="text" placeholder="搜索实体（如 OpenAI, GPT-5...）" onkeydown="if(event.key==='Enter') fetchEntityTimeline()">
+                            <button onclick="fetchEntityTimeline()">搜索</button>
+                        </div>
+                        <div id="timeline-container" class="timeline-container">
+                            <p class="timeline-placeholder">输入关键词后回车查看该实体的历史出现轨迹</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -169,6 +198,25 @@
                     </button>
                 </div>
                 <div class="catchup-body">
+                    <!-- Auto-catchup config -->
+                    <div class="catchup-config">
+                        <label class="catchup-config-label">
+                            <input type="checkbox" id="catchup-auto-chk" onchange="toggleAutoCatchup(this.checked)">
+                            自动补读
+                        </label>
+                        <span class="catchup-config-hint" id="catchup-config-hint">开启后，未读条目将自动混入今日简报</span>
+                        <div class="catchup-days-row" id="catchup-days-row">
+                            <label class="catchup-days-label">回看天数</label>
+                            <select id="catchup-days-select" onchange="updateCatchupDays(this.value)">
+                                <option value="3">3 天</option>
+                                <option value="5">5 天</option>
+                                <option value="7" selected>7 天</option>
+                                <option value="14">14 天</option>
+                                <option value="0">关闭</option>
+                            </select>
+                        </div>
+                    </div>
+                    <hr class="section-divider">
                     <div id="catchup-status" class="catchup-status">
                         <p class="catchup-placeholder">正在检查未读内容...</p>
                     </div>
@@ -210,39 +258,6 @@
             </div>
         </div>
 
-        <!-- Insights Modal -->
-        <div id="insights-modal" class="modal-overlay" onclick="if(event.target === this) toggleInsightsPanel()">
-            <div class="modal-content insights-modal-content">
-                <div class="persona-header">
-                    <h3>跨天话题洞察</h3>
-                    <button class="close-btn" onclick="toggleInsightsPanel()">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                </div>
-                <div class="insights-body">
-                    <div class="insights-controls">
-                        <label>近 <select id="heatmap-days" onchange="fetchHeatmap()">
-                            <option value="7" selected>7</option>
-                            <option value="14">14</option>
-                            <option value="30">30</option>
-                        </select> 天话题热度</label>
-                    </div>
-                    <div id="heatmap-container" class="heatmap-container">
-                        <p class="heatmap-placeholder">加载中...</p>
-                    </div>
-
-                    <hr class="section-divider">
-                    <h4>实体时间线</h4>
-                    <div class="entity-search-bar">
-                        <input id="entity-input" type="text" placeholder="搜索实体（如 OpenAI, GPT-5...）" onkeydown="if(event.key==='Enter') fetchEntityTimeline()">
-                        <button onclick="fetchEntityTimeline()">搜索</button>
-                    </div>
-                    <div id="timeline-container" class="timeline-container">
-                        <p class="timeline-placeholder">输入关键词后回车查看该实体的历史出现轨迹</p>
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- Sources Management Modal -->
         <div id="sources-modal" class="modal-overlay" onclick="if(event.target === this) toggleSourcesPanel()">
@@ -257,6 +272,19 @@
                     </button>
                 </div>
                 <div class="sources-body">
+                    <div class="sources-dashboard-section">
+                        <div class="sources-dashboard-grid" id="sources-dashboard-summary">
+                            <p class="sources-placeholder">正在加载来源仪表盘...</p>
+                        </div>
+                        <div class="sources-trend-panel" id="sources-trend-panel" style="display:none;"></div>
+                        <div class="sources-movement-panel" id="sources-movement-panel" style="display:none;"></div>
+                        <div class="sources-risk-list" id="sources-risk-list" style="display:none;"></div>
+                        <div class="sources-coverage-panel" id="sources-coverage-preview" style="display:none;"></div>
+                        <div class="sources-replacement-panel" id="sources-replacement-panel" style="display:none;"></div>
+                    </div>
+
+                    <hr class="section-divider">
+
                     <!-- Add New Source -->
                     <div class="sources-add-section">
                         <h4 class="metrics-card-title">添加 RSS 源</h4>
@@ -268,12 +296,45 @@
                         <div id="source-test-result" class="source-test-result" style="display:none;"></div>
                     </div>
 
+                    <div class="sources-discover-section">
+                        <h4 class="metrics-card-title">智能发现来源</h4>
+                        <p class="sources-discover-hint">基于当前板块主题，自动寻找并验证新的 RSS 订阅源。</p>
+                        <div class="sources-add-row">
+                            <input type="text" id="discover-source-query" placeholder="可选：补充更具体的主题，例如‘国产 AI 模型评测’" onkeydown="if(event.key==='Enter') discoverSourceFeeds()">
+                            <button class="sources-test-btn" onclick="discoverSourceFeeds()" title="发现可用 RSS 源">智能发现</button>
+                        </div>
+                        <div id="sources-discovery-result" class="sources-discovery-panel" style="display:none;"></div>
+                    </div>
+
                     <hr class="section-divider">
 
                     <!-- Current Feeds List -->
-                    <h4 class="metrics-card-title">当前板块信息源</h4>
+                    <div class="sources-list-header">
+                        <h4 class="metrics-card-title">当前板块信息源</h4>
+                        <button id="test-all-btn" class="sources-test-all-btn" onclick="testAllFeeds()" title="测试全部信息源">测试全部</button>
+                    </div>
                     <div id="sources-feed-list" class="sources-feed-list">
                         <p class="sources-placeholder">加载中...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="coverage-modal" class="modal-overlay" onclick="if(event.target === this) closeCoverageModal()">
+            <div class="modal-content coverage-modal-content">
+                <div class="persona-header coverage-modal-header">
+                    <div>
+                        <h3 id="coverage-modal-title">报道差异分析</h3>
+                        <p class="sources-subtitle" id="coverage-modal-subtitle">最近 3 天</p>
+                    </div>
+                    <button id="coverage-modal-close" class="close-btn" onclick="closeCoverageModal()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <div class="coverage-modal-body">
+                    <div id="coverage-modal-status" class="coverage-modal-status" style="display:none;"></div>
+                    <div id="coverage-modal-list" class="coverage-modal-list">
+                        <p class="sources-placeholder">正在加载报道差异...</p>
                     </div>
                 </div>
             </div>
@@ -289,6 +350,16 @@
         <div id="content-state" style="display: none;">
             <section class="overview-section fade-in">
                 <div class="overview-card" id="summary-overview"></div>
+            </section>
+            <section id="source-analysis-section" class="dashboard-metrics-card source-analysis-section" style="display:none;">
+                <div class="source-analysis-header">
+                    <div>
+                        <h4 class="metrics-card-title">多源报道差异</h4>
+                        <span id="source-analysis-hint" class="source-analysis-hint"></span>
+                    </div>
+                    <button id="source-analysis-view-all" type="button" class="source-analysis-header__action" style="display:none;" onclick="openCoverageModalFromSummary()">查看全部</button>
+                </div>
+                <div id="source-analysis-list" class="source-analysis-list"></div>
             </section>
             <main>
                 <!-- View Controls (Hidden by default) -->
@@ -353,7 +424,7 @@
 
     <!-- Stats Modal -->
     <div id="stats-modal" class="modal-overlay" onclick="if(event.target === this) toggleStatsPanel()">
-        <div class="modal-content stats-modal-content" style="max-width: 680px;">
+        <div class="modal-content stats-modal-content">
             <div class="persona-header">
                 <h3>数据统计</h3>
                 <button class="close-btn" onclick="toggleStatsPanel()">
@@ -441,9 +512,13 @@
                     <button type="submit" id="wizard-submit-btn" class="primary-btn">发送</button>
                     <button type="button" class="secondary-btn" onclick="closeBoardModal()">取消</button>
                 </form>
+                <div id="wizard-review-panel" class="wizard-review-panel" style="display:none;"></div>
                 <div id="wizard-apply-row" class="wizard-apply-row" style="display:none;">
-                    <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> AI 已生成推荐配置</span>
-                    <button type="button" class="primary-btn" onclick="applyWizardConfig()">应用到表单</button>
+                    <span id="wizard-apply-hint"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> AI 已生成推荐配置</span>
+                    <div class="wizard-apply-actions">
+                        <button type="button" id="wizard-preview-btn" class="secondary-btn" onclick="triggerWizardPreview(this)">预览抓取效果</button>
+                        <button type="button" class="primary-btn" onclick="applyWizardConfig()">应用到表单</button>
+                    </div>
                 </div>
             </div>
 

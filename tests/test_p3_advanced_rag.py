@@ -135,6 +135,7 @@ class TestMemoryService:
     async def test_save_and_get_memory(self):
         with patch("app.services.memory_service.AsyncSessionLocal") as mock_session_cls:
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 

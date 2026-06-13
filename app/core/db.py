@@ -57,10 +57,13 @@ async def _ensure_legacy_columns(conn) -> None:
         await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN schedule TEXT NOT NULL DEFAULT ''")
     if "notify_channels" not in board_columns:
         await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN notify_channels TEXT NOT NULL DEFAULT ''")
+    if "catchup_days" not in board_columns:
+        await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN catchup_days INTEGER NOT NULL DEFAULT 7")
 
     # Fix any rows where schedule/notify_channels ended up as NULL
     await conn.exec_driver_sql("UPDATE board SET schedule = '' WHERE schedule IS NULL")
     await conn.exec_driver_sql("UPDATE board SET notify_channels = '' WHERE notify_channels IS NULL")
+    await conn.exec_driver_sql("UPDATE board SET catchup_days = 7 WHERE catchup_days IS NULL")
 
     # Board table: new columns added in refactor (perspectives, prompt_key)
     if "perspectives" not in board_columns:
@@ -88,6 +91,17 @@ async def _ensure_legacy_columns(conn) -> None:
         await conn.exec_driver_sql("ALTER TABLE userpersona ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
     if "last_refreshed" not in persona_columns:
         await conn.exec_driver_sql("ALTER TABLE userpersona ADD COLUMN last_refreshed DATETIME")
+
+    source_result = await conn.exec_driver_sql("PRAGMA table_info(source)")
+    source_columns = {row[1] for row in source_result.fetchall()}
+    if source_columns:
+        if "credibility_override" not in source_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE source ADD COLUMN credibility_override TEXT NOT NULL DEFAULT ''"
+            )
+        await conn.exec_driver_sql(
+            "UPDATE source SET credibility_override = '' WHERE credibility_override IS NULL"
+        )
 
 
 async def _migrate_dailysummary_date_uniqueness(conn) -> None:
@@ -295,10 +309,15 @@ async def _migrate_phase2_schema(conn) -> None:
     if "ux_dailysummary_board_date" in existing_indexes:
         await conn.exec_driver_sql("DROP INDEX IF EXISTS ux_dailysummary_board_date")
     if "ux_dailysummary_board_date_perspective" not in existing_indexes:
-        await conn.exec_driver_sql(
-            "CREATE UNIQUE INDEX ux_dailysummary_board_date_perspective "
-            "ON dailysummary(board_id, date, perspective)"
-        )
+        try:
+            await conn.exec_driver_sql(
+                "CREATE UNIQUE INDEX ux_dailysummary_board_date_perspective "
+                "ON dailysummary(board_id, date, perspective)"
+            )
+        except Exception:
+            # Keep startup tolerant of legacy duplicate rows; stricter cleanup can
+            # be handled by a dedicated data migration instead of bricking boot.
+            pass
 
     # --- NewsItem.topic_path ---
     cols = await conn.exec_driver_sql("PRAGMA table_info(newsitem)")
@@ -306,6 +325,13 @@ async def _migrate_phase2_schema(conn) -> None:
     if "topic_path" not in col_names:
         await conn.exec_driver_sql(
             "ALTER TABLE newsitem ADD COLUMN topic_path TEXT NOT NULL DEFAULT ''"
+        )
+    if "cluster_id" not in col_names:
+        await conn.exec_driver_sql(
+            "ALTER TABLE newsitem ADD COLUMN cluster_id INTEGER"
+        )
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_newsitem_cluster_id ON newsitem(cluster_id)"
         )
 
     # --- Board.perspectives & prompt_key ---
@@ -344,6 +370,7 @@ async def _seed_default_sources(conn) -> None:
     to a Source row associated with the default board.
     """
     from app.core.config import settings as _settings
+    from urllib.parse import urlparse
 
     count_row = await conn.exec_driver_sql("SELECT COUNT(*) FROM source")
     existing = count_row.fetchone()[0]
@@ -356,11 +383,109 @@ async def _seed_default_sources(conn) -> None:
     board_id = board_row_result[0] if board_row_result else None
 
     for feed_url in _settings.RSS_FEEDS:
+        parsed = urlparse((feed_url or "").strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
         await conn.exec_driver_sql(
             "INSERT INTO source (url, name, source_type, enabled, board_id, health_status, created_at) "
             "VALUES (?, '', 'rss', 1, ?, 'healthy', CURRENT_TIMESTAMP)",
             (feed_url, board_id),
         )
+
+
+async def _sync_sources_from_board_configs(conn) -> None:
+    """Mirror RSS feeds from board.source_config into Source rows."""
+    import json as _json
+    from urllib.parse import urlparse
+
+    rows = await conn.exec_driver_sql(
+        "SELECT id, source_type, source_config FROM board WHERE source_type IN ('rss', 'multi')"
+    )
+    for board_id, source_type, raw_config in rows.fetchall():
+        if not raw_config:
+            continue
+        try:
+            config = _json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+        except Exception:
+            continue
+        if not isinstance(config, dict):
+            continue
+        if source_type == "rss":
+            feeds = config.get("feeds") or []
+        else:
+            feeds = ((config.get("sources") or {}).get("rss") or {}).get("feeds") or []
+        clean = []
+        for url in feeds:
+            if not isinstance(url, str):
+                continue
+            normalized = url.strip()
+            parsed = urlparse(normalized)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            if normalized not in clean:
+                clean.append(normalized)
+        for url in clean:
+            existing = await conn.exec_driver_sql(
+                "SELECT id FROM source WHERE board_id = ? AND source_type = 'rss' AND url = ? LIMIT 1",
+                (board_id, url),
+            )
+            if existing.fetchone():
+                await conn.exec_driver_sql(
+                    "UPDATE source SET enabled = 1 WHERE board_id = ? AND source_type = 'rss' AND url = ?",
+                    (board_id, url),
+                )
+            else:
+                await conn.exec_driver_sql(
+                    "INSERT INTO source (url, name, source_type, enabled, board_id, health_status, created_at) "
+                    "VALUES (?, '', 'rss', 1, ?, 'healthy', CURRENT_TIMESTAMP)",
+                    (url, board_id),
+                )
+
+
+async def _backfill_article_read_state(conn) -> None:
+    """Backfill ArticleReadState from legacy viewed dates."""
+    existing_table = await conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='articlereadstate'"
+    )
+    if not existing_table.fetchone():
+        return
+
+    rows = await conn.exec_driver_sql(
+        """
+        SELECT ni.original_link, ds.board_id, sv.viewed_at
+        FROM newsitem ni
+        JOIN dailysummary ds ON ds.id = ni.summary_id
+        JOIN summaryviewlog sv ON sv.date = ds.date
+        WHERE ni.original_link IS NOT NULL AND ni.original_link != ''
+        """
+    )
+    for url, board_id, viewed_at in rows.fetchall():
+        existing = await conn.exec_driver_sql(
+            """
+            SELECT id FROM articlereadstate
+            WHERE article_url = ? AND ((board_id = ?) OR (board_id IS NULL AND ? IS NULL))
+            LIMIT 1
+            """,
+            (url, board_id, board_id),
+        )
+        if existing.fetchone():
+            await conn.exec_driver_sql(
+                """
+                UPDATE articlereadstate
+                SET is_read = 1, read_at = COALESCE(read_at, ?), updated_at = CURRENT_TIMESTAMP
+                WHERE article_url = ? AND ((board_id = ?) OR (board_id IS NULL AND ? IS NULL))
+                """,
+                (viewed_at, url, board_id, board_id),
+            )
+        else:
+            await conn.exec_driver_sql(
+                """
+                INSERT INTO articlereadstate
+                    (article_url, board_id, is_read, first_seen_at, last_seen_at, read_at, created_at, updated_at)
+                VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (url, board_id, viewed_at),
+            )
 
 
 async def _seed_default_prompt_configs(conn) -> None:
@@ -468,6 +593,7 @@ async def init_db():
             SourceHealthLog,
             DailyReportRefinementSession,
             SummaryViewLog,
+            ArticleReadState,
             SavedArticle,
         )
         await conn.run_sync(SQLModel.metadata.create_all)
@@ -478,6 +604,8 @@ async def init_db():
         await _migrate_json_columns(conn)
         await _migrate_phase2_schema(conn)
         await _seed_default_sources(conn)
+        await _sync_sources_from_board_configs(conn)
+        await _backfill_article_read_state(conn)
         await _seed_default_prompt_configs(conn)
         await _seed_default_model_api_configs(conn)
 

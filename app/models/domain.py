@@ -1,7 +1,8 @@
 from datetime import datetime, UTC
 from typing import Optional, List
+from pydantic import ConfigDict
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import UniqueConstraint, JSON, Column, Text
+from sqlalchemy import UniqueConstraint, JSON, Column, Text, Integer
 
 
 class Board(SQLModel, table=True):
@@ -26,6 +27,7 @@ class Board(SQLModel, table=True):
     perspectives: Optional[dict] = Field(default=None, sa_column=Column(JSON))  # e.g. {"active": ["technical", "business"]}; None = single-view mode
     prompt_key: str = Field(default="daily_briefing", sa_column=Column(Text, nullable=False, server_default="daily_briefing"))  # prompt template key
     output_language: str = Field(default="auto", sa_column=Column(Text, nullable=False, server_default="auto"))  # "auto" | "zh" | "en" — forces LLM output language
+    catchup_days: int = Field(default=7, sa_column=Column(Integer, nullable=False, server_default="7"))  # auto-catchup window in days; 0 = off
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -34,11 +36,12 @@ class NewsItem(SQLModel, table=True):
     headline: str = Field(index=True)
     category: str = Field(default="Uncategorized", index=True)
     # Stored as native JSON column (migrated from JSON-string in refactor)
-    key_points: list = Field(default=[], sa_column=Column(JSON))
-    tags: list = Field(default=[], sa_column=Column(JSON))
+    key_points: list = Field(default_factory=list, sa_column=Column(JSON))
+    tags: list = Field(default_factory=list, sa_column=Column(JSON))
     topic_path: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))  # e.g. "AI/LLM/微调"
     original_link: str
     source: str
+    cluster_id: Optional[int] = Field(default=None, foreign_key="contentcluster.id", index=True, ondelete="SET NULL")
     
     # Foreign key to DailySummary with Cascade Delete
     summary_id: int = Field(foreign_key="dailysummary.id", ondelete="CASCADE")
@@ -139,6 +142,7 @@ class Source(SQLModel, table=True):
     name: str = Field(default="")                     # display name (auto-detected or manual)
     site_url: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))  # homepage
     source_type: str = Field(default="rss", index=True)  # "rss" | "hackernews" | "reddit" | "github"
+    credibility_override: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))  # "" | official | established | specialist | community | aggregator | mirror | ai_generated | risky
     enabled: bool = Field(default=True)
     board_id: Optional[int] = Field(
         default=None, foreign_key="board.id", ondelete="CASCADE", index=True
@@ -151,6 +155,8 @@ class Source(SQLModel, table=True):
 
 class PromptConfig(SQLModel, table=True):
     """Hot-reloadable prompt template, replacing app/prompts/*.md files."""
+    model_config = ConfigDict(protected_namespaces=())
+
     id: Optional[int] = Field(default=None, primary_key=True)
     key: str = Field(index=True, unique=True)         # e.g. "daily_briefing", "quality_scoring"
     template: str = Field(sa_column=Column(Text, nullable=False))  # prompt body
@@ -167,6 +173,8 @@ class PromptConfig(SQLModel, table=True):
 
 class ModelApiConfig(SQLModel, table=True):
     """LLM provider configuration, replacing environment variable multi-tier setup."""
+    model_config = ConfigDict(protected_namespaces=())
+
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)        # e.g. "default", "fast-groq", "smart-openai"
     base_url: str                                     # e.g. "https://api.openai.com/v1"
@@ -285,6 +293,23 @@ class SummaryViewLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     date: str = Field(index=True, unique=True)        # YYYY-MM-DD
     viewed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ArticleReadState(SQLModel, table=True):
+    """Article-level read state, scoped per board for single-user Argos."""
+    __table_args__ = (
+        UniqueConstraint("article_url", "board_id", name="ux_articlereadstate_url_board"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    article_url: str = Field(index=True)
+    board_id: Optional[int] = Field(default=None, foreign_key="board.id", index=True, ondelete="CASCADE")
+    is_read: bool = Field(default=False, index=True)
+    first_seen_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    read_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: Optional[datetime] = Field(default=None)
 
 
 # ---------------------------------------------------------------------------

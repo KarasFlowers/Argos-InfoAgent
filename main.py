@@ -49,14 +49,28 @@ async def lifespan(app: FastAPI):
     # Start APScheduler (handles periodic cleanup + future jobs)
     await start_scheduler()
 
-    # Pre-warm ChromaDB and load existing collections (no-op if RAG disabled)
-    rag_service.init_chroma()
+    # Pre-warm ChromaDB + embedding models in the background so the server
+    # becomes ready immediately instead of blocking startup on model loading
+    # (~25s cold). The first RAG request still benefits from the warm cache if
+    # it arrives after warm-up completes; otherwise it pays the load cost once.
+    async def _warmup_rag() -> None:
+        try:
+            await asyncio.to_thread(rag_service.init_chroma)
+            if settings.RAG_ENABLED:
+                await asyncio.to_thread(rag_service.prewarm_models)
+            logger.info("rag_warmup_complete")
+        except Exception:
+            logger.exception("rag_warmup_failed")
 
-    # Pre-load embedding models so first request doesn't pay the loading cost
+    warmup_task: asyncio.Task | None = None
     if settings.RAG_ENABLED:
-        await asyncio.to_thread(rag_service.prewarm_models)
+        warmup_task = asyncio.create_task(_warmup_rag())
+    else:
+        # Still load existing collections (cheap no-op when RAG disabled)
+        rag_service.init_chroma()
 
-    # Start background ingest workers
+    # Start background ingest workers (they block on an empty queue until
+    # warm-up finishes and URLs are enqueued, so launching them now is safe)
     worker_tasks: list[asyncio.Task] = []
     if settings.RAG_ENABLED and settings.RAG_BACKGROUND_INGEST_ENABLED:
         for i in range(settings.RAG_BACKGROUND_INGEST_WORKERS):
@@ -68,6 +82,14 @@ async def lifespan(app: FastAPI):
 
     # Shutdown scheduler
     shutdown_scheduler()
+
+    # Cancel warm-up if still running
+    if warmup_task and not warmup_task.done():
+        warmup_task.cancel()
+        try:
+            await warmup_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # Close shared httpx client
     from app.core.http_client import close_http_client
@@ -87,6 +109,11 @@ async def lifespan(app: FastAPI):
         task.cancel()
     if worker_tasks:
         await asyncio.gather(*worker_tasks, return_exceptions=True)
+
+    # Release the ChromaDB sqlite handle last, after all ingest workers have
+    # stopped touching it. On Windows a leaked lock would otherwise break the
+    # next run's client construction.
+    rag_service.close_chroma_client()
     logger.info("application_stopped")
 
 app = FastAPI(

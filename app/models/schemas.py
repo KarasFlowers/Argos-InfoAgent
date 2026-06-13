@@ -51,6 +51,10 @@ class SummaryItem(BaseModel):
     source: str
     feedback_sentiment: int | None = None
     persona_score: float | None = None
+    is_read: bool = False
+    cluster_id: int | None = None
+    is_catchup: bool = False
+    original_date: str | None = None  # YYYY-MM-DD of the original summary when is_catchup=True
 
     @model_validator(mode="before")
     @classmethod
@@ -119,9 +123,13 @@ class DailySummaryResponse(BaseModel):
     overview: str
     perspective: str = "overview"
     top_news: list[SummaryItem]
+    events: list[dict] = Field(default_factory=list)
     source_stats: dict[str, int] = Field(default_factory=dict)
     # Recommendation statistics for transparency
     recommendation_report: dict = Field(default_factory=dict)
+    # Auto-catchup items from recent unviewed days
+    catchup_news: list[SummaryItem] = Field(default_factory=list)
+    source_analysis: dict = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod

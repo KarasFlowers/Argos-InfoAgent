@@ -82,6 +82,9 @@ data/plugins/
 data/temp/
 data/t2i_templates/
 logs/*.log
+*.log
+.codex-ui-server.*.log
+.tmp/
 
 # Redis persistence
 dump.rdb
@@ -93,3 +96,6 @@ tools/*.zip
 
 # Documentation
 docs/
+
+# Reference project
+reference/

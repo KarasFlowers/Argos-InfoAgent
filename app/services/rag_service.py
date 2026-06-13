@@ -12,6 +12,7 @@ from app.services.rag import (  # noqa: F401
     get_cross_encoder,
     init_chroma,
     prewarm_models,
+    close_chroma_client,
     enqueue_for_ingest,
     get_ingest_status,
     ingest_worker_loop,

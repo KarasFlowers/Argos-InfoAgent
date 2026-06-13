@@ -32,10 +32,16 @@ class RSSAdapter(SourceAdapter):
         one_time_preference: str | None = None,
         since_hours: int = 24,  # noqa: ARG002 — RSS has no date filter
     ) -> "tuple[DailySummaryResponse | None, dict[str, str]]":
-        # Resolve feed list: prefer per-board config, fall back to global.
+        # Resolve feed list: Source table is the P0 source of truth, with
+        # source_config retained as a compatibility fallback.
         feeds: list[str] = []
-        config = board.source_config or {}
-        feeds = list(config.get("feeds") or [])
+        try:
+            from app.services.db_service import db_service
+            feeds = await db_service.get_board_rss_feeds(session, board)
+        except Exception as exc:
+            logger.debug("RSSAdapter Source lookup skipped for board '%s': %s", board.slug, exc)
+            config = board.source_config or {}
+            feeds = list(config.get("feeds") or [])
 
         if not feeds:
             feeds = list(settings.RSS_FEEDS)

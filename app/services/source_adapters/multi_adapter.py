@@ -58,7 +58,14 @@ class MultiSourceAdapter(SourceAdapter):
         config = board.source_config or {}
 
         sources_cfg: dict = config.get("sources", {})
-        if not sources_cfg:
+        source_table_rss_feeds: list[str] = []
+        try:
+            from app.services.db_service import db_service
+            source_table_rss_feeds = await db_service.get_board_rss_feeds(session, board)
+        except Exception as exc:
+            logger.debug("MultiSourceAdapter Source lookup skipped for board '%s': %s", board.slug, exc)
+
+        if not sources_cfg and not source_table_rss_feeds:
             logger.warning(
                 "MultiSourceAdapter: board '%s' has no 'sources' in source_config",
                 board.slug,
@@ -76,7 +83,10 @@ class MultiSourceAdapter(SourceAdapter):
 
         # RSS
         rss_cfg = sources_cfg.get("rss")
-        if rss_cfg:
+        if rss_cfg or source_table_rss_feeds:
+            rss_cfg = dict(rss_cfg or {})
+            if source_table_rss_feeds:
+                rss_cfg["feeds"] = source_table_rss_feeds
             tasks.append(asyncio.create_task(self._fetch_rss(rss_cfg)))
 
         # Hacker News
@@ -114,7 +124,7 @@ class MultiSourceAdapter(SourceAdapter):
 
         logger.info(
             "MultiSourceAdapter: %d items from %d sub-sources for board '%s'",
-            len(all_items), len(sources_cfg), board.slug,
+            len(all_items), len(tasks), board.slug,
         )
 
         from app.services.llm_service import llm_service

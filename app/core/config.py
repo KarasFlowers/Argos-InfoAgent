@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     FAST_LLM: str = ""
     SMART_LLM: str = ""
 
+    # Board wizard: when True, use the multi-stage grounded pipeline
+    # (plan → discover+verify real sources → finalize → preview). When False,
+    # fall back to the legacy single-call wizard_suggest_board path.
+    WIZARD_PIPELINE_ENABLED: bool = True
+
+    # RSSHub — generates standard RSS for sources without native feeds (公众号/
+    # 知乎/B站/即刻 ...). Used by the wizard's discovery stage. The base URL is
+    # the public instance by default; point it at a self-hosted instance for
+    # reliability. Set RSSHUB_ENABLED=false to skip RSSHub discovery entirely.
+    RSSHUB_ENABLED: bool = True
+    RSSHUB_BASE_URL: str = "https://rsshub.app"
+
     # Legacy DeepSeek-specific keys (used as fallback when LLM_* is unset)
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
@@ -125,6 +137,13 @@ class Settings(BaseSettings):
 
     # --- Web Search (Tavily) ---
     TAVILY_API_KEY: str | None = None             # Optional: enables web search in Deep Research
+
+    # --- Weekly report theme enrichment ---
+    # When enabled (and TAVILY_API_KEY is set), the weekly report runs an extra
+    # stage that web-searches the top themes and injects structured background
+    # into the editorial. Off by default — daily summary flow is unaffected.
+    WEEKLY_ENRICH_ENABLED: bool = False
+    WEEKLY_ENRICH_MAX_THEMES: int = 3             # How many top themes to enrich per weekly run
 
     # --- Multi-source scraper defaults ---
     GITHUB_TOKEN: str | None = None               # Optional: raises GitHub API rate limit

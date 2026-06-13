@@ -50,6 +50,7 @@ class BoardRepo:
         perspectives: dict | None = None,
         prompt_key: str = "daily_briefing",
         output_language: str = "auto",
+        catchup_days: int = 7,
     ) -> Board:
         board = Board(
             slug=slug,
@@ -65,6 +66,7 @@ class BoardRepo:
             perspectives=perspectives,
             prompt_key=prompt_key,
             output_language=output_language,
+            catchup_days=catchup_days,
         )
         session.add(board)
         await session.commit()
@@ -81,7 +83,7 @@ class BoardRepo:
             "name", "icon", "description", "system_prompt",
             "source_type", "source_config", "display_order", "is_active",
             "schedule", "notify_channels", "perspectives", "prompt_key",
-            "output_language"
+            "output_language", "catchup_days"
         }
         for key, value in updates.items():
             if key in allowed and value is not None:

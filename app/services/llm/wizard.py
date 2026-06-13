@@ -108,6 +108,157 @@ class WizardMixin:
                 "config": None,
             }
 
+    async def wizard_plan_sources(
+        self,
+        messages: list[dict],
+        context: dict | None = None,
+    ) -> dict:
+        """Pipeline stage ①: intent understanding + source strategy (fast LLM).
+
+        Decides source_type and produces *clues* for the discovery stage —
+        search terms and known identifiers — rather than RSS URLs directly.
+        Returns a normalized plan dict; ``ready=False`` carries a clarify
+        question for ambiguous input. Never raises.
+        """
+        if not settings.effective_llm_api_key:
+            return {"ready": False, "clarify": "LLM API key 未配置。"}
+
+        full_messages = [{"role": "system", "content": self._plan_system_prompt()}]
+        if context:
+            ctx_parts = []
+            if context.get("current_config"):
+                ctx_parts.append(f"当前配置：{json.dumps(context['current_config'], ensure_ascii=False)}")
+            if context.get("source_validation"):
+                ctx_parts.append(f"各源检测结果：{json.dumps(context['source_validation'], ensure_ascii=False)}")
+            if ctx_parts:
+                full_messages.append({
+                    "role": "system",
+                    "content": "[上下文] 用户在已有配置基础上调整：\n" + "\n".join(ctx_parts),
+                })
+        for m in messages:
+            role = m.get("role", "user")
+            if role in ("user", "assistant"):
+                full_messages.append({"role": role, "content": str(m.get("content", ""))})
+
+        try:
+            response = await self.llm.chat(
+                messages=full_messages,
+                tier="fast",
+                label="wizard:plan",
+                response_format={"type": "json_object"},
+                temperature=0.3,
+                max_tokens=900,
+            )
+            parsed = json.loads(response.choices[0].message.content or "{}")
+        except Exception as error:
+            logger.warning("wizard_plan_sources failed: %s", error)
+            return {"ready": False, "clarify": f"抱歉，AI 向导出错了: {error}"}
+
+        return self._normalize_plan(parsed)
+
+    @staticmethod
+    def _plan_system_prompt() -> str:
+        """Plan prompt with the RSSHub route catalog injected for the LLM."""
+        from app.services.rsshub import list_routes
+
+        lines = ["RSSHub 平台目录（platform → 参数 — 说明 — 示例）："]
+        for r in list_routes():
+            params = ", ".join(r["params"])
+            lines.append(f'- {r["platform"]}（{r["label"]}）参数: {params}；示例: {r["example"]}')
+        catalog = "\n".join(lines)
+        return get_prompt("board_wizard_plan").replace("{rsshub_routes}", catalog)
+
+    @staticmethod
+    def _normalize_plan(parsed: dict) -> dict:
+        """Coerce the raw plan JSON into a known shape with safe defaults."""
+        valid_types = ("rss", "pure_llm", "hackernews", "reddit", "github", "multi")
+        st = parsed.get("source_type")
+        cand = parsed.get("candidates") if isinstance(parsed.get("candidates"), dict) else {}
+        rsshub_entries = [
+            e for e in (cand.get("rsshub") or [])
+            if isinstance(e, dict) and e.get("platform")
+        ]
+        return {
+            "ready": bool(parsed.get("ready", False)),
+            "clarify": str(parsed.get("clarify", "")).strip(),
+            "intent": str(parsed.get("intent", "")).strip(),
+            "source_type": st if st in valid_types else "rss",
+            "slug": str(parsed.get("slug", "")).strip(),
+            "name": str(parsed.get("name", "")).strip(),
+            "icon": str(parsed.get("icon", "")).strip() or "📌",
+            "search_terms": [s for s in (parsed.get("search_terms") or []) if isinstance(s, str) and s.strip()][:4],
+            "homepage_hints": [h for h in (parsed.get("homepage_hints") or []) if isinstance(h, str) and h.strip()][:6],
+            "candidates": {
+                "hackernews": bool(cand.get("hackernews", False)),
+                "rsshub": rsshub_entries,
+            },
+        }
+
+    async def wizard_finalize(self, plan: dict, pool: dict) -> dict:
+        """Pipeline stage ④: choose sources from the *verified pool* + write the
+        system prompt (smart LLM). The LLM is constrained to pick only sources
+        that were already confirmed reachable. Returns {reply, config}.
+        """
+        if not settings.effective_llm_api_key:
+            return {"reply": "LLM API key 未配置。", "config": None}
+
+        verified = pool.get("verified") or []
+        pool_lines = []
+        for e in verified:
+            label = e.get("label") or e.get("url") or e.get("source_type")
+            samples = e.get("sample_titles") or []
+            sample_str = f"｜示例：{'；'.join(samples[:3])}" if samples else ""
+            trust_bits = []
+            if e.get("trust_label"):
+                trust_bits.append(f"可信度={e.get('trust_label')}")
+            if e.get("trust_score") is not None:
+                trust_bits.append(f"评分={e.get('trust_score')}")
+            if e.get("quality_summary"):
+                trust_bits.append(f"备注={e.get('quality_summary')}")
+            trust_str = f"｜{'；'.join(trust_bits)}" if trust_bits else ""
+            pool_lines.append(f"- [{e.get('source_type')}] {label}{sample_str}{trust_str}")
+        pool_text = "\n".join(pool_lines) if pool_lines else "（候选池为空，没有可用的已验证源）"
+
+        user_content = (
+            f"用户意图：{plan.get('intent', '')}\n"
+            f"初步命名：slug={plan.get('slug', '')} name={plan.get('name', '')} "
+            f"icon={plan.get('icon', '')} source_type={plan.get('source_type', '')}\n\n"
+            f"已验证候选池：\n{pool_text}"
+        )
+
+        try:
+            response = await self.llm.chat(
+                messages=[
+                    {"role": "system", "content": get_prompt("board_wizard_finalize")},
+                    {"role": "user", "content": user_content},
+                ],
+                tier="smart",
+                label="wizard:finalize",
+                response_format={"type": "json_object"},
+                temperature=0.4,
+                max_tokens=1200,
+            )
+            parsed = json.loads(response.choices[0].message.content or "{}")
+        except Exception as error:
+            logger.warning("wizard_finalize failed: %s", error)
+            return {"reply": f"抱歉，AI 向导出错了: {error}", "config": None}
+
+        reply = str(parsed.get("reply", "")).strip() or "（AI 未返回回复）"
+        config = parsed.get("config") if isinstance(parsed.get("config"), dict) else None
+        if config:
+            valid_types = ("rss", "pure_llm", "hackernews", "reddit", "github", "multi")
+            config = {
+                "slug": str(config.get("slug", "") or plan.get("slug", "")).strip(),
+                "name": str(config.get("name", "") or plan.get("name", "")).strip(),
+                "icon": str(config.get("icon", "") or plan.get("icon", "")).strip() or "📌",
+                "source_type": config.get("source_type") if config.get("source_type") in valid_types else plan.get("source_type", "rss"),
+                "source_config": config.get("source_config") if isinstance(config.get("source_config"), dict) else {},
+                "system_prompt": str(config.get("system_prompt", "")).strip(),
+            }
+            if not config["slug"] or not config["name"]:
+                config = None
+        return {"reply": reply, "config": config}
+
 
     async def suggest_alternative_feeds(
         self,

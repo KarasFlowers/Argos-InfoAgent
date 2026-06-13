@@ -241,8 +241,13 @@ async def _synthesize(
         return f"Research synthesis failed: {exc}"
 
 
-async def _tavily_search(query: str, max_results: int = 3) -> list[dict[str, str]]:
-    """Search the web using Tavily API."""
+async def tavily_search(query: str, max_results: int = 3) -> list[dict[str, str]]:
+    """Search the web using Tavily API.
+
+    Public, reusable helper (also consumed by the weekly enrichment stage).
+    Returns ``[]`` when ``TAVILY_API_KEY`` is unset. Each result dict has
+    keys ``type`` ("web"), ``title``, ``content`` (truncated), ``url``.
+    """
     import httpx
     from app.core.config import settings
 
@@ -271,3 +276,7 @@ async def _tavily_search(query: str, max_results: int = 3) -> list[dict[str, str
             "url": r.get("url", ""),
         })
     return results
+
+
+# Backward-compatible private alias (existing internal call sites use this name).
+_tavily_search = tavily_search

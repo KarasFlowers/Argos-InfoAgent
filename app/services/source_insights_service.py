@@ -1,0 +1,753 @@
+"""Source health, quality, credibility, and coverage analysis helpers."""
+
+from __future__ import annotations
+
+import re
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+from urllib.parse import urlsplit
+
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.domain import ContentCluster, DailySummary, NewsItem, Source, SourceHealthLog
+from app.services.filtering_service import _DEFAULT_LOW_QUALITY_DOMAINS
+
+_MULTIPART_SUFFIXES = {
+    "co.uk",
+    "org.uk",
+    "gov.uk",
+    "com.cn",
+    "net.cn",
+    "org.cn",
+    "gov.cn",
+    "edu.cn",
+    "co.jp",
+}
+_TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{1,}")
+_ANGLE_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "into",
+    "about",
+    "after",
+    "will",
+    "have",
+    "has",
+    "its",
+    "their",
+    "your",
+    "news",
+    "update",
+    "latest",
+    "today",
+}
+_CREDIBILITY_BONUS = {
+    "official": 22.0,
+    "established": 14.0,
+    "specialist": 9.0,
+    "community": 3.0,
+    "aggregator": -7.0,
+    "mirror": -13.0,
+    "ai_generated": -12.0,
+    "risky": -26.0,
+}
+_CREDIBILITY_MIN_SCORE = {
+    "official": 82.0,
+    "established": 72.0,
+    "specialist": 66.0,
+}
+_CREDIBILITY_MAX_SCORE = {
+    "aggregator": 55.0,
+    "mirror": 38.0,
+    "ai_generated": 40.0,
+    "risky": 24.0,
+}
+_CREDIBILITY_NOTES = {
+    "official": "Marked as an official or first-party publication.",
+    "established": "Marked as an established mainstream publication.",
+    "specialist": "Marked as a specialist source with domain expertise.",
+    "community": "Marked as a community-led source that still needs editorial judgment.",
+    "aggregator": "Marked as an aggregator, so attribution and originality need checking.",
+    "mirror": "Marked as a mirror or republisher rather than the original outlet.",
+    "ai_generated": "Marked as AI-generated content rather than first-hand reporting.",
+    "risky": "Marked as high risk and should be treated cautiously.",
+}
+
+
+def _host_for_url(url: str) -> str:
+    try:
+        host = (urlsplit(url).hostname or "").strip().lower()
+    except Exception:
+        return ""
+    for prefix in ("www.", "feeds.", "rss."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+    return host
+
+
+def _root_domain(host_or_url: str) -> str:
+    host = _host_for_url(host_or_url) if "://" in (host_or_url or "") else (host_or_url or "").strip().lower()
+    if not host:
+        return ""
+    parts = [part for part in host.split(".") if part]
+    if len(parts) <= 2:
+        return ".".join(parts)
+    suffix = ".".join(parts[-2:])
+    if suffix in _MULTIPART_SUFFIXES and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
+    return max(low, min(high, value))
+
+
+def _trust_label(score: float) -> str:
+    if score >= 80:
+        return "high"
+    if score >= 62:
+        return "medium"
+    if score >= 42:
+        return "watch"
+    return "risky"
+
+
+def _normalize_credibility_override(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in _CREDIBILITY_BONUS else ""
+
+
+def _summarize_quality_notes(notes: list[str]) -> str:
+    if not notes:
+        return "Signals look stable."
+    if len(notes) == 1:
+        return notes[0]
+    return f"{notes[0]} Also: {notes[1]}"
+
+
+def score_source_quality(
+    *,
+    url: str,
+    source_type: str,
+    credibility_override: str | None = None,
+    ok: bool | None = None,
+    health_status: str | None = None,
+    success_rate: float | None = None,
+    article_count: int | None = None,
+    event_count: int | None = None,
+    sample_titles: list[str] | None = None,
+) -> dict:
+    """Heuristic trust/quality score for dashboard and wizard decisions."""
+    notes: list[str] = []
+    score = 48.0
+    host = _host_for_url(url)
+    root = _root_domain(host)
+    override = _normalize_credibility_override(credibility_override)
+
+    if override:
+        score += _CREDIBILITY_BONUS[override]
+        notes.append(_CREDIBILITY_NOTES[override])
+
+    if url.startswith("https://"):
+        score += 8
+    else:
+        score -= 8
+        notes.append("Feed is not served over HTTPS.")
+
+    if "rsshub" in host:
+        score -= 4
+        notes.append("Feed is generated through RSSHub, so stability depends on the instance.")
+
+    if root and root in _DEFAULT_LOW_QUALITY_DOMAINS:
+        score -= 28
+        notes.append("Domain is flagged as low quality by the rule-based filter.")
+
+    if source_type in {"github", "hackernews"}:
+        score += 6
+    elif source_type == "pure_llm":
+        score -= 6
+        notes.append("This source is generated by AI rather than fetched from an external publication.")
+
+    if ok is False:
+        score -= 18
+        notes.append("Most recent validation failed.")
+    elif ok is True:
+        score += 8
+
+    if health_status == "healthy":
+        score += 12
+    elif health_status == "degraded":
+        score += 2
+        notes.append("Recent fetches show intermittent failures.")
+    elif health_status == "unhealthy":
+        score -= 24
+        notes.append("Recent fetches repeatedly failed.")
+
+    if success_rate is not None:
+        score += (success_rate - 0.5) * 30
+        if success_rate < 0.5:
+            notes.append("Recent success rate is low.")
+        elif success_rate > 0.85:
+            notes.append("Recent success rate is consistently strong.")
+
+    if article_count is not None:
+        score += min(article_count, 8) * 1.5
+        if article_count == 0:
+            notes.append("No recent articles were surfaced from this source.")
+        elif article_count >= 6:
+            notes.append("Source is contributing a steady stream of recent articles.")
+
+    if event_count is not None:
+        score += min(event_count, 5) * 1.2
+        if event_count >= 3:
+            notes.append("Source contributes to multiple distinct events.")
+
+    title_count = len(sample_titles or [])
+    if title_count >= 3:
+        score += 5
+    elif title_count == 0 and ok:
+        score -= 6
+        notes.append("Validation succeeded but returned no article samples.")
+
+    if override in _CREDIBILITY_MIN_SCORE:
+        score = max(score, _CREDIBILITY_MIN_SCORE[override])
+    if override in _CREDIBILITY_MAX_SCORE:
+        score = min(score, _CREDIBILITY_MAX_SCORE[override])
+
+    trust_score = round(_clamp(score), 1)
+    trust_label = _trust_label(trust_score)
+    return {
+        "trust_score": trust_score,
+        "trust_label": trust_label,
+        "quality_notes": notes[:4],
+        "quality_summary": _summarize_quality_notes(notes[:2]),
+    }
+
+
+def annotate_source_validation(entries: list[dict]) -> list[dict]:
+    annotated: list[dict] = []
+    for entry in entries or []:
+        merged = dict(entry)
+        merged.update(
+            score_source_quality(
+                url=str(entry.get("url") or ""),
+                source_type=str(entry.get("source_type") or "rss"),
+                credibility_override=str(entry.get("credibility_override") or ""),
+                ok=entry.get("ok"),
+                article_count=int(entry.get("article_count") or 0),
+                sample_titles=entry.get("sample_titles") or [],
+            )
+        )
+        annotated.append(merged)
+    return annotated
+
+
+def _rank_source_candidates(entries: list[dict]) -> list[dict]:
+    return sorted(
+        entries or [],
+        key=lambda entry: (
+            float(entry.get("trust_score") or 0.0),
+            int(entry.get("article_count") or 0),
+            1 if entry.get("ok") else 0,
+        ),
+        reverse=True,
+    )
+
+
+def review_source_candidates(entries: list[dict], *, min_non_risky: int = 3) -> dict:
+    """Explain which candidates were kept or dropped and why.
+
+    The wizard and source dashboard both need a product-facing explanation,
+    not just a sorted list. When the pool already contains enough non-risky
+    options, risky entries are dropped and surfaced in ``dropped``.
+    """
+    ranked = _rank_source_candidates(entries)
+    safe_count = sum(
+        1
+        for entry in ranked
+        if entry.get("ok") and entry.get("trust_label") != "risky"
+    )
+    should_drop_risky = safe_count >= min_non_risky
+    selected: list[dict] = []
+    dropped: list[dict] = []
+
+    for entry in ranked:
+        reason = entry.get("quality_summary") or "Signals are weaker than the rest of the pool."
+        merged = {
+            **entry,
+            "selection_reason": reason,
+        }
+        if not entry.get("ok"):
+            merged["selection_reason"] = (
+                "Dropped because source validation failed. "
+                + reason
+            )
+            dropped.append(merged)
+        elif should_drop_risky and entry.get("trust_label") == "risky":
+            merged["selection_reason"] = (
+                "Dropped because safer verified sources were already available. "
+                + reason
+            )
+            dropped.append(merged)
+        else:
+            selected.append(merged)
+
+    if dropped and selected:
+        summary = (
+            f"Kept {len(selected)} stronger verified sources and filtered out "
+            f"{len(dropped)} risky option(s)."
+        )
+    elif dropped:
+        summary = (
+            "No usable verified source candidates are currently available; "
+            f"filtered out {len(dropped)} failed or risky option(s)."
+        )
+    elif selected:
+        summary = f"Kept {len(selected)} verified source option(s); the pool still needs manual review for final quality."
+    else:
+        summary = "No verified source candidates are currently available."
+
+    return {
+        "selected": selected,
+        "dropped": dropped,
+        "safe_count": safe_count,
+        "summary": summary,
+    }
+
+
+def prioritize_source_candidates(entries: list[dict], *, min_non_risky: int = 3) -> list[dict]:
+    """Sort source candidates by trust and optionally drop the riskiest ones."""
+    return review_source_candidates(entries, min_non_risky=min_non_risky)["selected"]
+
+
+def summarize_source_risk(source: dict) -> dict:
+    """Turn a raw quality record into actionable remediation copy."""
+    trust = source.get("trust_label") or "unknown"
+    health = source.get("health_status") or "unknown"
+    notes = list(source.get("quality_notes") or [])
+    headline = source.get("quality_summary") or source.get("last_error") or "Needs manual review."
+
+    if trust == "risky":
+        action = "Replace this source or keep it disabled until a safer feed is found."
+    elif trust == "watch" or health in {"degraded", "unhealthy"}:
+        action = "Retest this source and consider a replacement if failures continue."
+    else:
+        action = "Keep monitoring this source; no immediate action is required."
+
+    return {
+        "risk_summary": headline,
+        "risk_notes": notes[:4],
+        "recommended_action": action,
+    }
+
+
+def _extract_tokens(text: str) -> set[str]:
+    return {
+        token.lower()
+        for token in _TOKEN_RE.findall(text or "")
+        if token.lower() not in _ANGLE_STOPWORDS and len(token) > 2
+    }
+
+
+def _source_angle_text(item: NewsItem) -> str:
+    points = (item.key_points or [])[:2]
+    if points:
+        return " ".join(str(point).strip() for point in points if str(point).strip())[:240]
+    return (item.headline or "")[:240]
+
+
+def _coverage_difference_summary(shared_topics: list[str], divergence_score: float, source_count: int) -> str:
+    topic_text = ", ".join(shared_topics[:3]) if shared_topics else "the same event"
+    if divergence_score >= 70:
+        return f"Sources agree on {topic_text}, but the coverage angles diverge sharply across {source_count} outlets."
+    if divergence_score >= 45:
+        return f"Sources overlap on {topic_text}, while still emphasizing noticeably different details."
+    return f"Sources are broadly aligned on {topic_text}, with only minor angle differences."
+
+
+def _source_movement_summary(movement: str, source_name: str) -> str:
+    label = source_name or "This source"
+    if movement == "recovered":
+        return f"{label} recovered on the latest check after a recent failure."
+    if movement == "degraded":
+        return f"{label} regressed on the latest check after a previously healthy result."
+    return f"{label} changed state recently."
+
+
+async def get_source_dashboard(
+    session: AsyncSession,
+    *,
+    board_id: int | None = None,
+    days: int = 7,
+    limit: int = 50,
+) -> dict:
+    """Build a dashboard of source health and recent contribution quality."""
+    safe_days = max(1, min(days, 30))
+    stmt = select(Source)
+    if board_id is not None:
+        stmt = stmt.where(Source.board_id == board_id)
+    stmt = stmt.order_by(Source.enabled.desc(), Source.id)
+    source_rows = list((await session.execute(stmt)).scalars().all())
+    if not source_rows:
+        return {
+            "window_days": safe_days,
+            "summary": {
+                "total_sources": 0,
+                "enabled_sources": 0,
+                "healthy_sources": 0,
+                "degraded_sources": 0,
+                "unhealthy_sources": 0,
+                "avg_success_rate": None,
+                "avg_response_time_ms": None,
+            },
+            "sources": [],
+            "at_risk_sources": [],
+            "top_domains": [],
+            "health_timeline": [],
+            "recent_movements": [],
+        }
+
+    source_ids = [source.id for source in source_rows if source.id]
+    log_stmt = select(SourceHealthLog).where(SourceHealthLog.source_id.in_(source_ids)).order_by(
+        SourceHealthLog.source_id,
+        desc(SourceHealthLog.checked_at),
+    )
+    all_logs = list((await session.execute(log_stmt)).scalars().all()) if source_ids else []
+    logs_by_source: dict[int, list[SourceHealthLog]] = defaultdict(list)
+    for log in all_logs:
+        logs_by_source[log.source_id].append(log)
+
+    today = datetime.now().date()
+    cutoff_date = today - timedelta(days=safe_days - 1)
+    cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+    item_stmt = (
+        select(DailySummary.date, NewsItem)
+        .join(NewsItem, NewsItem.summary_id == DailySummary.id)
+        .where(DailySummary.date >= cutoff_str)
+        .order_by(desc(DailySummary.date), desc(NewsItem.id))
+    )
+    if board_id is not None:
+        item_stmt = item_stmt.where(DailySummary.board_id == board_id)
+    item_rows = list((await session.execute(item_stmt)).all())
+
+    sources_by_root: dict[str, list[Source]] = defaultdict(list)
+    sources_by_name: dict[str, list[Source]] = defaultdict(list)
+    for source in source_rows:
+        root = _root_domain(source.url)
+        if root:
+            sources_by_root[root].append(source)
+        if source.name:
+            sources_by_name[source.name.strip().lower()].append(source)
+
+    article_counts: Counter[int] = Counter()
+    event_counts: dict[int, set[int]] = defaultdict(set)
+    domain_counts: Counter[str] = Counter()
+    for _, item in item_rows:
+        article_root = _root_domain(item.original_link)
+        if article_root:
+            domain_counts[article_root] += 1
+        matched_sources = sources_by_name.get(item.source.strip().lower(), []) if item.source else []
+        if not matched_sources:
+            matched_sources = sources_by_root.get(article_root, [])
+        for source in matched_sources:
+            if source.id is None:
+                continue
+            article_counts[source.id] += 1
+            if item.cluster_id:
+                event_counts[source.id].add(int(item.cluster_id))
+
+    dashboard_sources: list[dict] = []
+    recent_movements: list[dict] = []
+    success_rates: list[float] = []
+    avg_response_values: list[float] = []
+    for source in source_rows[: max(limit, len(source_rows))]:
+        source_logs = logs_by_source.get(source.id or -1, [])
+        recent_logs = source_logs[:10]
+        ok_count = sum(1 for log in recent_logs if log.status == "ok")
+        success_rate = (ok_count / len(recent_logs)) if recent_logs else None
+        if success_rate is not None:
+            success_rates.append(success_rate)
+        response_samples = [log.response_time_ms for log in recent_logs if log.response_time_ms is not None]
+        avg_response = round(sum(response_samples) / len(response_samples), 1) if response_samples else None
+        if avg_response is not None:
+            avg_response_values.append(avg_response)
+        consecutive_failures = 0
+        for log in recent_logs:
+            if log.status != "ok":
+                consecutive_failures += 1
+            else:
+                break
+        latest_log = recent_logs[0] if recent_logs else None
+        previous_log = recent_logs[1] if len(recent_logs) > 1 else None
+        latest_movement = None
+        if latest_log and previous_log and latest_log.status != previous_log.status:
+            if latest_log.status == "ok" and previous_log.status != "ok":
+                latest_movement = "recovered"
+            elif latest_log.status != "ok" and previous_log.status == "ok":
+                latest_movement = "degraded"
+        quality = score_source_quality(
+            url=source.url,
+            source_type=source.source_type,
+            credibility_override=source.credibility_override,
+            health_status=source.health_status,
+            success_rate=success_rate,
+            article_count=article_counts.get(source.id or -1, 0),
+            event_count=len(event_counts.get(source.id or -1, set())),
+        )
+        dashboard_sources.append(
+            {
+                "id": source.id,
+                "name": source.name or "",
+                "url": source.url,
+                "source_type": source.source_type,
+                "credibility_override": _normalize_credibility_override(source.credibility_override),
+                "enabled": bool(source.enabled),
+                "health_status": source.health_status,
+                "last_error": source.last_error or "",
+                "last_fetched_at": source.last_fetched_at.isoformat() if source.last_fetched_at else None,
+                "last_check": {
+                    "status": latest_log.status if latest_log else None,
+                    "status_code": latest_log.status_code if latest_log else None,
+                    "response_time_ms": latest_log.response_time_ms if latest_log else None,
+                    "error_message": latest_log.error_message if latest_log else "",
+                    "checked_at": latest_log.checked_at.isoformat() if latest_log else None,
+                } if latest_log else None,
+                "recent_checks": len(recent_logs),
+                "success_rate": round(success_rate, 3) if success_rate is not None else None,
+                "avg_response_time_ms": avg_response,
+                "consecutive_failures": consecutive_failures,
+                "recent_article_count": article_counts.get(source.id or -1, 0),
+                "recent_event_count": len(event_counts.get(source.id or -1, set())),
+                "recent_statuses": [
+                    {
+                        "status": log.status,
+                        "status_code": log.status_code,
+                        "response_time_ms": log.response_time_ms,
+                        "error_message": log.error_message,
+                        "checked_at": log.checked_at.isoformat(),
+                    }
+                    for log in recent_logs[:6]
+                ],
+                "latest_movement": latest_movement,
+                **quality,
+            }
+        )
+        dashboard_sources[-1].update(summarize_source_risk(dashboard_sources[-1]))
+        if latest_movement and latest_log:
+            recent_movements.append(
+                {
+                    "id": source.id,
+                    "name": source.name or "",
+                    "url": source.url,
+                    "movement": latest_movement,
+                    "summary": _source_movement_summary(latest_movement, source.name or source.url),
+                    "checked_at": latest_log.checked_at.isoformat(),
+                    "health_status": source.health_status,
+                    "trust_label": dashboard_sources[-1]["trust_label"],
+                }
+            )
+
+    dashboard_sources.sort(
+        key=lambda source: (
+            source["enabled"],
+            source["trust_score"],
+            source["recent_article_count"],
+        ),
+        reverse=True,
+    )
+    timeline_logs = [log for log in all_logs if log.checked_at.date() >= cutoff_date]
+    logs_by_day: dict[str, list[SourceHealthLog]] = defaultdict(list)
+    for log in timeline_logs:
+        logs_by_day[log.checked_at.date().isoformat()].append(log)
+    health_timeline: list[dict] = []
+    for offset in range(safe_days):
+        date_key = (cutoff_date + timedelta(days=offset)).isoformat()
+        day_logs = logs_by_day.get(date_key, [])
+        total_checks = len(day_logs)
+        ok_checks = sum(1 for log in day_logs if log.status == "ok")
+        timeout_checks = sum(1 for log in day_logs if log.status == "timeout")
+        error_checks = sum(1 for log in day_logs if log.status == "error")
+        response_samples = [log.response_time_ms for log in day_logs if log.response_time_ms is not None]
+        health_timeline.append(
+            {
+                "date": date_key,
+                "checks": total_checks,
+                "ok_checks": ok_checks,
+                "error_checks": error_checks,
+                "timeout_checks": timeout_checks,
+                "failed_checks": total_checks - ok_checks,
+                "success_rate": round(ok_checks / total_checks, 3) if total_checks else None,
+                "sources_checked": len({log.source_id for log in day_logs}),
+                "avg_response_time_ms": round(sum(response_samples) / len(response_samples), 1) if response_samples else None,
+            }
+        )
+    risky = [source for source in dashboard_sources if source["trust_label"] in {"watch", "risky"}][:5]
+    healthy_sources = sum(1 for source in source_rows if source.health_status == "healthy")
+    degraded_sources = sum(1 for source in source_rows if source.health_status == "degraded")
+    unhealthy_sources = sum(1 for source in source_rows if source.health_status == "unhealthy")
+    trust_counts = Counter(source["trust_label"] for source in dashboard_sources)
+    recent_movements.sort(key=lambda entry: entry["checked_at"], reverse=True)
+
+    return {
+        "window_days": safe_days,
+        "summary": {
+            "total_sources": len(source_rows),
+            "enabled_sources": sum(1 for source in source_rows if source.enabled),
+            "healthy_sources": healthy_sources,
+            "degraded_sources": degraded_sources,
+            "unhealthy_sources": unhealthy_sources,
+            "high_trust_sources": trust_counts.get("high", 0),
+            "medium_trust_sources": trust_counts.get("medium", 0),
+            "watch_sources": trust_counts.get("watch", 0),
+            "risky_sources": trust_counts.get("risky", 0),
+            "manual_override_sources": sum(1 for source in source_rows if _normalize_credibility_override(source.credibility_override)),
+            "avg_success_rate": round(sum(success_rates) / len(success_rates), 3) if success_rates else None,
+            "avg_response_time_ms": round(sum(avg_response_values) / len(avg_response_values), 1) if avg_response_values else None,
+        },
+        "sources": dashboard_sources[:limit],
+        "at_risk_sources": risky,
+        "top_domains": [{"domain": domain, "article_count": count} for domain, count in domain_counts.most_common(8)],
+        "health_timeline": health_timeline,
+        "recent_movements": recent_movements[:8],
+    }
+
+
+async def get_source_coverage_analysis(
+    session: AsyncSession,
+    *,
+    board_id: int | None = None,
+    date: str | None = None,
+    days: int = 3,
+    limit: int = 6,
+) -> dict:
+    """Compare how multiple sources covered the same recent story clusters."""
+    safe_days = max(2, min(days, 7))
+    latest_date = date
+    if not latest_date:
+        latest_stmt = select(DailySummary.date).order_by(desc(DailySummary.date)).limit(1)
+        if board_id is not None:
+            latest_stmt = latest_stmt.where(DailySummary.board_id == board_id)
+        latest_date = (await session.execute(latest_stmt)).scalar_one_or_none()
+    if not latest_date:
+        return {"date": None, "lookback_days": safe_days, "items": []}
+
+    try:
+        latest_dt = datetime.strptime(latest_date, "%Y-%m-%d").date()
+    except ValueError:
+        latest_dt = datetime.now().date()
+        latest_date = latest_dt.strftime("%Y-%m-%d")
+    cutoff_str = (latest_dt - timedelta(days=safe_days - 1)).strftime("%Y-%m-%d")
+
+    stmt = (
+        select(DailySummary.date, NewsItem)
+        .join(NewsItem, NewsItem.summary_id == DailySummary.id)
+        .where(
+            DailySummary.date >= cutoff_str,
+            DailySummary.date <= latest_date,
+            NewsItem.cluster_id.is_not(None),
+        )
+        .order_by(desc(DailySummary.date), desc(NewsItem.id))
+    )
+    if board_id is not None:
+        stmt = stmt.where(DailySummary.board_id == board_id)
+    rows = list((await session.execute(stmt)).all())
+    if not rows:
+        return {"date": latest_date, "lookback_days": safe_days, "items": []}
+
+    grouped: dict[int, list[tuple[str, NewsItem]]] = defaultdict(list)
+    cluster_ids: list[int] = []
+    for date_value, item in rows:
+        cluster_id = int(item.cluster_id)
+        grouped[cluster_id].append((date_value, item))
+        if cluster_id not in cluster_ids:
+            cluster_ids.append(cluster_id)
+
+    cluster_stmt = select(ContentCluster).where(ContentCluster.id.in_(cluster_ids))
+    clusters = {
+        cluster.id: cluster
+        for cluster in (await session.execute(cluster_stmt)).scalars().all()
+        if cluster.id
+    }
+
+    analyses: list[dict] = []
+    for cluster_id, items in grouped.items():
+        by_source: dict[str, tuple[str, NewsItem]] = {}
+        source_pool: list[str] = []
+        for date_value, item in items:
+            source_name = (item.source or "Unknown").strip()
+            if source_name not in source_pool:
+                source_pool.append(source_name)
+            if source_name not in by_source:
+                by_source[source_name] = (date_value, item)
+        if len(by_source) < 2:
+            continue
+
+        tag_counter: Counter[str] = Counter()
+        token_sets: list[set[str]] = []
+        source_angles: list[dict] = []
+        for source_name, (date_value, item) in by_source.items():
+            tags = [str(tag).strip() for tag in (item.tags or []) if str(tag).strip()]
+            tag_counter.update(tags)
+            angle_text = _source_angle_text(item)
+            token_sets.append(_extract_tokens(f"{item.headline} {' '.join(tags)} {angle_text}"))
+            source_angles.append(
+                {
+                    "source": source_name,
+                    "date": date_value,
+                    "headline": item.headline,
+                    "category": item.category,
+                    "tags": tags[:5],
+                    "angle": angle_text,
+                    "original_link": item.original_link,
+                }
+            )
+
+        overlap_scores: list[float] = []
+        for idx in range(len(token_sets)):
+            for jdx in range(idx + 1, len(token_sets)):
+                left = token_sets[idx]
+                right = token_sets[jdx]
+                if not left or not right:
+                    continue
+                overlap_scores.append(len(left & right) / len(left | right))
+        avg_overlap = sum(overlap_scores) / len(overlap_scores) if overlap_scores else 0.15
+        divergence_score = round(_clamp((1 - avg_overlap) * 100), 1)
+        divergence_label = "high" if divergence_score >= 70 else "medium" if divergence_score >= 45 else "low"
+        shared_topics = [tag for tag, count in tag_counter.most_common(4) if count >= 2]
+        latest_seen = max(date_value for date_value, _ in items)
+        cluster = clusters.get(cluster_id)
+        analyses.append(
+            {
+                "cluster_id": cluster_id,
+                "title": cluster.title if cluster else items[0][1].headline,
+                "latest_date": latest_seen,
+                "source_count": len(by_source),
+                "item_count": len(items),
+                "sources": list(by_source.keys()),
+                "shared_topics": shared_topics,
+                "divergence_score": divergence_score,
+                "divergence_label": divergence_label,
+                "difference_summary": _coverage_difference_summary(shared_topics, divergence_score, len(by_source)),
+                "source_angles": source_angles,
+            }
+        )
+
+    analyses.sort(
+        key=lambda entry: (
+            entry["source_count"],
+            entry["divergence_score"],
+            entry["latest_date"],
+        ),
+        reverse=True,
+    )
+    return {
+        "date": latest_date,
+        "lookback_days": safe_days,
+        "items": analyses[:limit],
+    }

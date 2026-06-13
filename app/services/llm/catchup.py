@@ -5,6 +5,7 @@ import logging
 from app.core.config import settings
 from app.models.schemas import DailySummaryResponse
 from app.prompts import get_prompt
+from app.services.dedup_service import normalize_url
 from app.services.llm.client import CircuitOpenError
 
 logger = logging.getLogger(__name__)
@@ -53,28 +54,116 @@ def _build_catchup_data(summaries: list[dict]) -> str:
 class CatchupMixin:
     """Mixin providing catch-up digest generation for LLMService."""
 
-    async def _score_catchup_items(
-        self, summaries: list[dict]
-    ) -> list[dict]:
-        """Pre-filter: score each top_news item across all summaries and drop low-importance ones.
+    @staticmethod
+    def _catchup_story_key(item: dict) -> tuple[str, str] | None:
+        """Build a stable dedupe key for a catch-up news item."""
+        url = str(item.get("original_link", "") or "").strip()
+        if url:
+            normalized = normalize_url(url).strip().lower()
+            if normalized:
+                return ("url", normalized)
 
-        Returns a new list of summary dicts with only high-importance items retained.
+        headline = str(item.get("headline", "") or "").strip().lower()
+        if headline:
+            return ("headline", headline[:160])
+        return None
+
+    @staticmethod
+    def _catchup_item_richness(item: dict) -> int:
+        """Prefer the version with more detail when duplicates collide."""
+        key_points = item.get("key_points") or []
+        tags = item.get("tags") or []
+        joined = " ".join(
+            [
+                str(item.get("headline", "") or ""),
+                str(item.get("original_link", "") or ""),
+                " ".join(str(k) for k in key_points),
+                " ".join(str(t) for t in tags),
+            ]
+        )
+        return len(joined)
+
+    @classmethod
+    def _prefer_catchup_item(cls, candidate: dict, incumbent: dict) -> bool:
+        """Choose the newer or richer duplicate when the same story repeats."""
+        candidate_date = str(candidate.get("_origin_date", "") or "")
+        incumbent_date = str(incumbent.get("_origin_date", "") or "")
+        if candidate_date != incumbent_date:
+            return candidate_date > incumbent_date
+
+        candidate_richness = cls._catchup_item_richness(candidate)
+        incumbent_richness = cls._catchup_item_richness(incumbent)
+        if candidate_richness != incumbent_richness:
+            return candidate_richness > incumbent_richness
+
+        return int(candidate.get("_origin_order", 0) or 0) > int(
+            incumbent.get("_origin_order", 0) or 0
+        )
+
+    @classmethod
+    def _dedupe_catchup_summaries(cls, summaries: list[dict]) -> list[dict]:
+        """Remove repeated stories across days before scoring or digesting.
+
+        Keeps the newest variant of the same article URL, then groups the
+        survivors back into their original daily summary shape.
         """
-        # Flatten all items with their origin date for scoring
-        flat_items: list[dict] = []
-        for s in summaries:
-            date = s.get("date", "")
-            for n in s.get("top_news", []):
-                flat_items.append({
-                    "index": len(flat_items),
-                    "date": date,
-                    "headline": n.get("headline", ""),
-                    "summary": "; ".join(n.get("key_points", []))[:200],
-                })
+        if not summaries:
+            return []
 
+        winners: dict[tuple[str, str], dict] = {}
+        unkeyed: list[dict] = []
+        origin_order = 0
+
+        for summary in summaries:
+            date = str(summary.get("date", "") or "")
+            for item in summary.get("top_news", []) or []:
+                candidate = dict(item)
+                candidate["_origin_date"] = date
+                candidate["_origin_order"] = origin_order
+                origin_order += 1
+
+                key = cls._catchup_story_key(candidate)
+                if key is None:
+                    unkeyed.append(candidate)
+                    continue
+
+                incumbent = winners.get(key)
+                if incumbent is None or cls._prefer_catchup_item(candidate, incumbent):
+                    winners[key] = candidate
+
+        grouped_items: dict[str, list[dict]] = {}
+        kept_items = sorted(
+            [*winners.values(), *unkeyed],
+            key=lambda item: (
+                str(item.get("_origin_date", "") or ""),
+                int(item.get("_origin_order", 0) or 0),
+            ),
+        )
+        for item in kept_items:
+            date = str(item.get("_origin_date", "") or "")
+            cleaned = {k: v for k, v in item.items() if not k.startswith("_origin_")}
+            grouped_items.setdefault(date, []).append(cleaned)
+
+        deduped: list[dict] = []
+        for summary in summaries:
+            date = str(summary.get("date", "") or "")
+            top_news = grouped_items.get(date) or []
+            if top_news:
+                deduped.append({**summary, "top_news": top_news})
+
+        return deduped
+
+    async def _score_flat_items(self, flat_items: list[dict]) -> set[int]:
+        """Score a flat list of ``{index, headline, summary}`` dicts via the fast tier.
+
+        Returns the set of ``index`` values scoring >= ``CATCHUP_QUALITY_THRESHOLD``.
+        Fails open: on any error (or circuit open) every index is returned so callers
+        keep all items rather than silently dropping content.
+        """
         if not flat_items:
-            return summaries
+            return set()
 
+        all_indices = {fi["index"] for fi in flat_items}
         input_for_scoring = json.dumps(flat_items, ensure_ascii=False)
 
         try:
@@ -101,38 +190,78 @@ class CatchupMixin:
                 for item in scores
                 if isinstance(item, dict) and item.get("score", 0) >= CATCHUP_QUALITY_THRESHOLD
             }
-
-            # Build a set of (date, headline) pairs that passed
-            passed_keys: set[tuple[str, str]] = set()
-            for fi in flat_items:
-                if fi["index"] in high_indices:
-                    passed_keys.add((fi["date"], fi["headline"]))
-
-            # Rebuild summaries keeping only high-importance items
-            filtered_summaries = []
-            for s in summaries:
-                date = s.get("date", "")
-                kept = [
-                    n for n in s.get("top_news", [])
-                    if (date, n.get("headline", "")) in passed_keys
-                ]
-                if kept:
-                    filtered_summaries.append({**s, "top_news": kept})
-
             logger.info(
                 "Catchup quality filter: %s/%s items passed (threshold=%s)",
-                len(passed_keys),
+                len(high_indices),
                 len(flat_items),
                 CATCHUP_QUALITY_THRESHOLD,
             )
-            return filtered_summaries if filtered_summaries else summaries
+            return high_indices
 
         except CircuitOpenError as error:
-            logger.warning("Circuit breaker open during catchup scoring, skipping filter: %s", error)
-            return summaries
+            logger.warning("Circuit breaker open during catchup scoring, keeping all items: %s", error)
+            return all_indices
         except Exception as error:
-            logger.warning("Catchup scoring failed, using all items: %s", error)
+            logger.warning("Catchup scoring failed, keeping all items: %s", error)
+            return all_indices
+
+    async def select_important_catchup_indices(self, items: list[dict]) -> set[int]:
+        """Strict importance filter for a flat list of catch-up items.
+
+        ``items`` is an ordered list of ``{"headline": str, "summary": str}`` dicts;
+        the returned set holds the positional indices (0-based) that pass the
+        importance threshold. Fails open (returns all indices) on error.
+        """
+        flat_items = [
+            {"index": i, "headline": it.get("headline", ""), "summary": (it.get("summary", "") or "")[:200]}
+            for i, it in enumerate(items)
+        ]
+        return await self._score_flat_items(flat_items)
+
+    async def _score_catchup_items(
+        self, summaries: list[dict]
+    ) -> list[dict]:
+        """Pre-filter: score each top_news item across all summaries and drop low-importance ones.
+
+        Returns a new list of summary dicts with only high-importance items retained.
+        """
+        summaries = self._dedupe_catchup_summaries(summaries)
+
+        # Flatten all items with their origin date for scoring
+        flat_items: list[dict] = []
+        origins: list[tuple[str, int]] = []
+        for s in summaries:
+            date = s.get("date", "")
+            for item_index, n in enumerate(s.get("top_news", [])):
+                flat_items.append({
+                    "index": len(flat_items),
+                    "date": date,
+                    "headline": n.get("headline", ""),
+                    "summary": "; ".join(n.get("key_points", []))[:200],
+                })
+                origins.append((date, item_index))
+
+        if not flat_items:
             return summaries
+
+        high_indices = await self._score_flat_items(flat_items)
+
+        # Build a set of (date, item_index) pairs that passed.
+        passed_keys = {origins[i] for i in high_indices if i < len(origins)}
+
+        # Rebuild summaries keeping only high-importance items
+        filtered_summaries = []
+        for s in summaries:
+            date = s.get("date", "")
+            kept = [
+                n
+                for item_index, n in enumerate(s.get("top_news", []))
+                if (date, item_index) in passed_keys
+            ]
+            if kept:
+                filtered_summaries.append({**s, "top_news": kept})
+
+        return filtered_summaries if filtered_summaries else summaries
 
     async def generate_catchup_digest(
         self,

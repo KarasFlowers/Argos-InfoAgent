@@ -11,12 +11,22 @@ Pipeline:
 """
 
 import json
+import logging
 import numpy as np
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.domain import UserFeedback, NewsItem
+from app.models.domain import DailySummary, UserFeedback, NewsItem
 from app.core.db import AsyncSessionLocal
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_feedback_url(url: str) -> str:
+    normalized = (url or "").strip()
+    if not normalized:
+        raise ValueError("Feedback article URL cannot be empty.")
+    return normalized
 
 
 def _normalize_vector(vector: np.ndarray) -> np.ndarray | None:
@@ -34,6 +44,7 @@ async def record_feedback(url: str, sentiment: int) -> bool:
     """
     if sentiment not in (1, -1, 0):
         raise ValueError("Sentiment must be 1 (Like), -1 (Dislike), or 0 (Clear).")
+    url = _normalize_feedback_url(url)
 
     async with AsyncSessionLocal() as session:
         statement = select(UserFeedback).where(UserFeedback.article_url == url)
@@ -58,7 +69,11 @@ async def record_feedback(url: str, sentiment: int) -> bool:
         return True
 
 
-async def _get_article_text_for_urls(session: AsyncSession, urls: list[str]) -> list[str]:
+async def _get_article_text_for_urls(
+    session: AsyncSession,
+    urls: list[str],
+    board_id: int | None = None,
+) -> list[str]:
     """
     Look up NewsItem entries by original_link to build rich text representations.
     Falls back to URL-derived text if no DB match is found.
@@ -69,6 +84,15 @@ async def _get_article_text_for_urls(session: AsyncSession, urls: list[str]) -> 
     statement = select(NewsItem.original_link, NewsItem.headline, NewsItem.key_points).where(
         NewsItem.original_link.in_(urls)
     )
+    if board_id is not None:
+        statement = (
+            select(NewsItem.original_link, NewsItem.headline, NewsItem.key_points)
+            .join(DailySummary, DailySummary.id == NewsItem.summary_id)
+            .where(
+                NewsItem.original_link.in_(urls),
+                DailySummary.board_id == board_id,
+            )
+        )
     result = await session.execute(statement)
     rows = result.all()
 
@@ -94,13 +118,18 @@ async def _get_article_text_for_urls(session: AsyncSession, urls: list[str]) -> 
     for url in urls:
         if url in url_to_text:
             texts.append(url_to_text[url])
+        elif board_id is not None:
+            continue
         else:
             # Fallback: derive minimal text from URL
             texts.append(url.replace("-", " ").replace("/", " "))
     return texts
 
 
-async def get_user_feedback_profiles() -> tuple[np.ndarray | None, np.ndarray | None]:
+async def get_user_feedback_profiles(
+    session: AsyncSession | None = None,
+    board_id: int | None = None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
     """
     Compute positive/negative preference centroids from explicit feedback.
     Uses article headline + key_points for semantically rich embeddings.
@@ -108,23 +137,37 @@ async def get_user_feedback_profiles() -> tuple[np.ndarray | None, np.ndarray | 
     Returns:
         (positive_centroid, negative_centroid), each can be None.
     """
-    async with AsyncSessionLocal() as session:
+    async def _load_profile_texts(active_session: AsyncSession) -> tuple[list[str], list[str]]:
         statement = select(UserFeedback.article_url, UserFeedback.sentiment)
-        result = await session.execute(statement)
+        result = await active_session.execute(statement)
         rows = result.all()
 
         if not rows:
-            return None, None
+            return [], []
 
         liked_urls = [url for url, sentiment in rows if sentiment == 1]
         disliked_urls = [url for url, sentiment in rows if sentiment == -1]
 
         # Fetch rich article content from DB
-        liked_texts = await _get_article_text_for_urls(session, liked_urls)
-        disliked_texts = await _get_article_text_for_urls(session, disliked_urls)
+        liked_texts = await _get_article_text_for_urls(active_session, liked_urls, board_id=board_id)
+        disliked_texts = await _get_article_text_for_urls(active_session, disliked_urls, board_id=board_id)
+        return liked_texts, disliked_texts
 
-    from app.services.rag_service import get_bi_encoder
-    bi_encoder = get_bi_encoder()
+    if session is not None:
+        liked_texts, disliked_texts = await _load_profile_texts(session)
+    else:
+        async with AsyncSessionLocal() as active_session:
+            liked_texts, disliked_texts = await _load_profile_texts(active_session)
+
+    if not liked_texts and not disliked_texts:
+        return None, None
+
+    try:
+        from app.services.rag_service import get_bi_encoder
+        bi_encoder = get_bi_encoder()
+    except RuntimeError as exc:
+        logger.debug("Feedback vector profile skipped: %s", exc)
+        return None, None
 
     positive_centroid: np.ndarray | None = None
     negative_centroid: np.ndarray | None = None
@@ -151,7 +194,11 @@ async def get_user_centroid() -> np.ndarray | None:
     return positive_centroid
 
 
-async def get_inferred_interests(session: AsyncSession, limit: int = 5) -> list[dict]:
+async def get_inferred_interests(
+    session: AsyncSession,
+    limit: int = 5,
+    board_id: int | None = None,
+) -> list[dict]:
     """
     Analyze liked articles to find the most frequent categories and tags.
     Returns a list of {name: str, count: int, type: "category"|"tag"}.
@@ -166,6 +213,17 @@ async def get_inferred_interests(session: AsyncSession, limit: int = 5) -> list[
         
     # 2. Fetch tags and categories for these URLs
     stmt = select(NewsItem.category, NewsItem.tags).where(NewsItem.original_link.in_(liked_urls))
+    if board_id is not None:
+        from app.models.domain import DailySummary
+
+        stmt = (
+            select(NewsItem.category, NewsItem.tags)
+            .join(DailySummary, DailySummary.id == NewsItem.summary_id)
+            .where(
+                NewsItem.original_link.in_(liked_urls),
+                DailySummary.board_id == board_id,
+            )
+        )
     res = await session.execute(stmt)
     rows = res.all()
     
@@ -176,10 +234,15 @@ async def get_inferred_interests(session: AsyncSession, limit: int = 5) -> list[
         if cat:
             categories[cat] = categories.get(cat, 0) + 1
         
-        try:
-            item_tags = json.loads(tags_json) if tags_json else []
-        except (json.JSONDecodeError, TypeError):
-            continue
+        if isinstance(tags_json, list):
+            item_tags = tags_json
+        elif isinstance(tags_json, str):
+            try:
+                item_tags = json.loads(tags_json) if tags_json else []
+            except (json.JSONDecodeError, TypeError):
+                item_tags = []
+        else:
+            item_tags = []
         for t in item_tags:
             tags[t] = tags.get(t, 0) + 1
             
@@ -196,7 +259,11 @@ async def get_inferred_interests(session: AsyncSession, limit: int = 5) -> list[
     return results
 
 
-async def rerank_summary_items(items: list, session: AsyncSession | None = None) -> list:
+async def rerank_summary_items(
+    items: list,
+    session: AsyncSession | None = None,
+    board_id: int | None = None,
+) -> list:
     """
     Rerank SummaryItem list by:
       1. Explicit preferences (focus/block topics, prefer/avoid sources)
@@ -220,7 +287,7 @@ async def rerank_summary_items(items: list, session: AsyncSession | None = None)
     if session:
         try:
             from app.services.db_service import db_service
-            prefs = await db_service.get_explicit_preferences(session)
+            prefs = await db_service.get_explicit_preferences(session, board_id=board_id)
         except Exception:
             pass
 
@@ -242,7 +309,7 @@ async def rerank_summary_items(items: list, session: AsyncSession | None = None)
         items = filtered
 
     # --- Phase 2: Embedding-based reranking ---
-    positive_centroid, negative_centroid = await get_user_feedback_profiles()
+    positive_centroid, negative_centroid = await get_user_feedback_profiles(session=session, board_id=board_id)
 
     has_vectors = positive_centroid is not None or negative_centroid is not None
     has_prefs = any(prefs[k] for k in prefs)

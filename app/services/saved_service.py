@@ -22,6 +22,13 @@ def _validate_status(status: str) -> None:
         raise ValueError(f"status must be one of {VALID_STATUSES}, got '{status}'.")
 
 
+def _normalize_url(url: str) -> str:
+    normalized = (url or "").strip()
+    if not normalized:
+        raise ValueError("article URL cannot be empty.")
+    return normalized
+
+
 async def add_saved(
     url: str,
     status: str,
@@ -33,6 +40,7 @@ async def add_saved(
 ) -> bool:
     """Add (idempotent upsert) a saved article for the given status."""
     _validate_status(status)
+    url = _normalize_url(url)
 
     async with AsyncSessionLocal() as session:
         stmt = select(SavedArticle).where(
@@ -66,6 +74,7 @@ async def add_saved(
 async def remove_saved(url: str, status: str) -> bool:
     """Remove a saved article for the given status. No-op if not present."""
     _validate_status(status)
+    url = _normalize_url(url)
 
     async with AsyncSessionLocal() as session:
         stmt = select(SavedArticle).where(

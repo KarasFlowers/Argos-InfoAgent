@@ -29,13 +29,14 @@ async def log_source_health(
     response_time_ms: int | None = None,
 ) -> None:
     """Record a health-check result and update the source's health_status."""
+    checked_at = datetime.now(UTC)
     log = SourceHealthLog(
         source_id=source_id,
         status=status,
         status_code=status_code,
         error_message=error_message[:500] if error_message else "",
         response_time_ms=response_time_ms,
-        checked_at=datetime.now(UTC),
+        checked_at=checked_at,
     )
     session.add(log)
 
@@ -63,6 +64,8 @@ async def log_source_health(
     src_result = await session.execute(src_stmt)
     source = src_result.scalar_one_or_none()
     if source:
+        source.last_fetched_at = checked_at if status == "ok" else source.last_fetched_at
+        source.last_error = "" if status == "ok" else (error_message[:500] if error_message else source.last_error)
         if consecutive_failures >= _CONSECUTIVE_FAILURES_THRESHOLD:
             if source.health_status != "unhealthy":
                 source.health_status = "unhealthy"
@@ -70,9 +73,17 @@ async def log_source_health(
                     "Source '%s' (id=%d) marked unhealthy after %d consecutive failures",
                     source.name, source.id, consecutive_failures,
                 )
-        elif status == "ok" and source.health_status == "unhealthy":
-            source.health_status = "healthy"
-            logger.info("Source '%s' (id=%d) recovered to healthy", source.name, source.id)
+        elif consecutive_failures > 0:
+            if source.health_status != "degraded":
+                source.health_status = "degraded"
+                logger.info(
+                    "Source '%s' (id=%d) marked degraded after %d recent failure(s)",
+                    source.name, source.id, consecutive_failures,
+                )
+        else:
+            if source.health_status != "healthy":
+                source.health_status = "healthy"
+                logger.info("Source '%s' (id=%d) recovered to healthy", source.name, source.id)
 
     await session.commit()
 

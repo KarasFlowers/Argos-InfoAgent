@@ -36,10 +36,18 @@ def _fingerprint(title: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+def _cluster_fingerprint(title: str, board_id: int | None) -> str:
+    """Generate the persisted fingerprint, scoped to a board when available."""
+    scope = f"board:{board_id}" if board_id is not None else "global"
+    return f"{scope}:{_fingerprint(title)}"
+
+
 async def assign_clusters(
     items: list[NewsItem],
     board_id: int | None,
     session: AsyncSession,
+    *,
+    commit: bool = True,
 ) -> dict[int, int]:
     """Assign news items to clusters. Returns {item_id: cluster_id}.
 
@@ -56,11 +64,13 @@ async def assign_clusters(
     result = await session.execute(stmt)
     existing_clusters: list[ContentCluster] = list(result.scalars().all())
 
+    existing_by_id = {c.id: c for c in existing_clusters if c.id is not None}
     # Build cluster title index
-    cluster_titles = {c.id: c.title for c in existing_clusters}
+    cluster_titles = {c.id: c.title for c in existing_clusters if c.id is not None}
 
     assignments: dict[int, int] = {}
     new_clusters: list[ContentCluster] = []
+    pending_by_fingerprint: dict[str, ContentCluster] = {}
 
     # Try to use Bi-Encoder for embeddings
     embedder = _get_embedder()
@@ -83,18 +93,47 @@ async def assign_clusters(
 
         if best_cluster_id and best_score >= _CLUSTER_THRESHOLD:
             assignments[item.id] = best_cluster_id
+            item.cluster_id = best_cluster_id
             # Update existing cluster
-            for c in existing_clusters:
-                if c.id == best_cluster_id:
-                    c.item_count += 1
-                    ids = c.item_ids or []
+            c = existing_by_id.get(best_cluster_id)
+            if c:
+                c.item_count += 1
+                ids = c.item_ids or []
+                if item.id not in ids:
                     ids.append(item.id)
-                    c.item_ids = ids
-                    c.last_updated_at = datetime.now(UTC)
-                    break
+                c.item_ids = ids
+                c.last_updated_at = datetime.now(UTC)
         else:
             # Create new cluster
-            fp = _fingerprint(item.headline)
+            fp = _cluster_fingerprint(item.headline, board_id)
+            pending = pending_by_fingerprint.get(fp)
+            if pending:
+                ids = pending.item_ids or []
+                if item.id not in ids:
+                    ids.append(item.id)
+                pending.item_ids = ids
+                pending.item_count = len(ids)
+                pending.last_updated_at = datetime.now(UTC)
+                continue
+
+            existing_stmt = select(ContentCluster).where(ContentCluster.fingerprint == fp)
+            if board_id is not None:
+                existing_stmt = existing_stmt.where(ContentCluster.board_id == board_id)
+            existing_result = await session.execute(existing_stmt)
+            existing = existing_result.scalar_one_or_none()
+            if existing and existing.id:
+                assignments[item.id] = existing.id
+                item.cluster_id = existing.id
+                existing.item_count += 1
+                ids = existing.item_ids or []
+                if item.id not in ids:
+                    ids.append(item.id)
+                existing.item_ids = ids
+                existing.last_updated_at = datetime.now(UTC)
+                existing_by_id[existing.id] = existing
+                cluster_titles[existing.id] = existing.title
+                continue
+
             cluster = ContentCluster(
                 fingerprint=fp,
                 title=item.headline,
@@ -106,6 +145,7 @@ async def assign_clusters(
             )
             session.add(cluster)
             new_clusters.append(cluster)
+            pending_by_fingerprint[fp] = cluster
             # Add to title index for subsequent items in same batch
             # (id will be set after flush)
 
@@ -120,6 +160,8 @@ async def assign_clusters(
                 existing_stmt = select(ContentCluster).where(
                     ContentCluster.fingerprint == cluster.fingerprint
                 )
+                if board_id is not None:
+                    existing_stmt = existing_stmt.where(ContentCluster.board_id == board_id)
                 ex_result = await session.execute(existing_stmt)
                 existing = ex_result.scalar_one_or_none()
                 if existing and cluster.item_ids:
@@ -137,9 +179,15 @@ async def assign_clusters(
             if cluster.id and cluster.item_ids:
                 for item_id in cluster.item_ids:
                     assignments[item_id] = cluster.id
+                    matched_item = next((candidate for candidate in items if candidate.id == item_id), None)
+                    if matched_item:
+                        matched_item.cluster_id = cluster.id
                 cluster_titles[cluster.id] = cluster.title
 
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
 
     logger.info(
         "Clustering: %d items -> %d assignments (%d new clusters)",

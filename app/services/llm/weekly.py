@@ -1,4 +1,5 @@
 """Weekly consolidation / recap generation — multi-stage pipeline."""
+import asyncio
 import json
 import logging
 from typing import Any
@@ -20,6 +21,84 @@ def _build_week_data(summaries: list[dict]) -> str:
             f"### {date}\nOverview: {overview}\nHeadlines: {', '.join(headlines)}"
         )
     return "\n\n".join(daily_inputs)
+
+
+async def _enrich_themes(themes: list[dict], llm) -> None:
+    """Enrich the top recurring themes with web-grounded background, in-place.
+
+    For each of the top ``WEEKLY_ENRICH_MAX_THEMES`` themes: web-search the
+    theme (Tavily), then ask the fast LLM for structured background. The result
+    is attached as ``theme["enrichment"]`` = {whats_new, why_it_matters,
+    background, sources}. Gated behind ``WEEKLY_ENRICH_ENABLED`` + a configured
+    ``TAVILY_API_KEY``; any failure degrades silently (theme left unenriched).
+
+    Aggregation-level adaptation of Horizon's per-item ContentEnricher.
+    """
+    if not settings.WEEKLY_ENRICH_ENABLED or not settings.TAVILY_API_KEY:
+        return
+    if not themes:
+        return
+
+    from app.services.research_service import tavily_search
+
+    # Themes come from raw LLM output — operate only on well-formed dict entries.
+    targets = [t for t in themes[: max(1, settings.WEEKLY_ENRICH_MAX_THEMES)] if isinstance(t, dict)]
+    if not targets:
+        return
+    enrich_prompt = get_prompt("weekly_theme_enrich", required=False)
+    if not enrich_prompt:
+        logger.warning("weekly_theme_enrich prompt missing — skipping enrichment")
+        return
+
+    async def _one(theme: dict) -> None:
+        label = (theme.get("label") or "").strip()
+        arc = (theme.get("arc_summary") or "").strip()
+        query = f"{label} {arc}".strip()
+        if not query:
+            return
+        try:
+            results = await tavily_search(query, max_results=3)
+        except Exception as exc:
+            logger.debug("Theme enrichment search failed for '%s': %s", label, exc)
+            return
+        if not results:
+            return
+
+        available = {r["url"]: r["title"] for r in results if r.get("url")}
+        web_context = "\n".join(
+            f"- [{r['title']}]({r['url']}): {r['content']}" for r in results
+        )
+        user = (
+            f"Theme: {label}\nArc summary: {arc}\n\n"
+            f"Web search results:\n{web_context}"
+        )
+        try:
+            response = await llm.chat(
+                messages=[
+                    {"role": "system", "content": enrich_prompt},
+                    {"role": "user", "content": user},
+                ],
+                tier="fast",
+                label="weekly:enrich",
+                response_format={"type": "json_object"},
+                temperature=0.2,
+                max_tokens=700,
+            )
+            data = json.loads(response.choices[0].message.content or "{}")
+        except Exception as exc:
+            logger.debug("Theme enrichment LLM failed for '%s': %s", label, exc)
+            return
+
+        # Keep only citations that actually came from our search results.
+        sources = [u for u in (data.get("sources") or []) if u in available]
+        theme["enrichment"] = {
+            "whats_new": (data.get("whats_new") or "").strip(),
+            "why_it_matters": (data.get("why_it_matters") or "").strip(),
+            "background": (data.get("background") or "").strip(),
+            "sources": sources,
+        }
+
+    await asyncio.gather(*(_one(t) for t in targets), return_exceptions=True)
 
 
 class WeeklyMixin:
@@ -123,6 +202,13 @@ class WeeklyMixin:
         except Exception as exc:
             logger.warning("Weekly stats failed: %s", exc)
 
+        # Stage 2.5: Optional theme enrichment (fast LLM + web search).
+        # Gated behind WEEKLY_ENRICH_ENABLED + TAVILY_API_KEY; degrades silently.
+        try:
+            await _enrich_themes(result["themes"], self.llm)
+        except Exception as exc:
+            logger.debug("Weekly theme enrichment skipped: %s", exc)
+
         # Stage 3: Editorial (smart LLM) — pass theme context for richer output
         try:
             editor_prompt = get_prompt("weekly_editor") + lang_directive
@@ -133,6 +219,14 @@ class WeeklyMixin:
                     themes_context += (
                         f"- **{t.get('label', '')}**: {t.get('arc_summary', '')}\n"
                     )
+                    enrich = t.get("enrichment")
+                    if enrich:
+                        if enrich.get("whats_new"):
+                            themes_context += f"  - What's new: {enrich['whats_new']}\n"
+                        if enrich.get("why_it_matters"):
+                            themes_context += f"  - Why it matters: {enrich['why_it_matters']}\n"
+                        if enrich.get("background"):
+                            themes_context += f"  - Background: {enrich['background']}\n"
 
             editorial_response = await self.llm.chat(
                 messages=[

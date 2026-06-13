@@ -171,26 +171,81 @@ def get_cross_encoder():
 # imported for type-checking or testing without a data directory present.
 _chroma_client = None
 
+# Guards construction/teardown of the singleton above. Concurrent callers
+# (startup init, the model pre-warm thread, background ingest workers, request
+# handlers) must not race to build competing clients for the same path: with
+# ChromaDB's refcounted SharedSystemClient that race can stop a system twice,
+# surfacing the masking ``'RustBindingsAPI' object has no attribute 'bindings'``
+# AttributeError from ChromaDB's own teardown path.
+_chroma_lock = threading.Lock()
+
+
+def _build_persistent_client():
+    """Create a PersistentClient, recovering from SharedSystemClient cache
+    inconsistencies.
+
+    ChromaDB 0.5.x/1.5.x can leave its ``_identifier_to_system`` cache in a bad
+    state, and its failure-cleanup path raises a *masking* AttributeError
+    (``del self.bindings`` on a system whose ``start()`` didn't complete) that
+    hides the real cause. We clear the shared-system cache and retry once on any
+    failure, logging the underlying error so it isn't swallowed.
+    """
+    import chromadb
+    try:
+        return chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
+    except Exception as exc:
+        from chromadb.api.shared_system_client import SharedSystemClient
+        logger.warning(
+            "ChromaDB client construction failed (%s: %s); clearing shared-system "
+            "cache and retrying once", type(exc).__name__, exc,
+        )
+        try:
+            SharedSystemClient.clear_system_cache()
+        except Exception:
+            logger.debug("clear_system_cache during recovery also failed", exc_info=True)
+        return chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
+
 
 def _get_chroma_client():
-    """Return the shared ChromaDB PersistentClient, creating it on first call."""
+    """Return the shared ChromaDB PersistentClient, creating it on first call.
+
+    Thread-safe via ``_chroma_lock`` (double-checked) so concurrent callers
+    don't race to construct competing clients for the same path.
+    """
     _require_rag()
-    import chromadb
     global _chroma_client
-    if _chroma_client is None:
+    if _chroma_client is not None:
+        return _chroma_client
+    with _chroma_lock:
+        if _chroma_client is None:
+            _chroma_client = _build_persistent_client()
+            logger.info("ChromaDB PersistentClient initialised at %s", settings.CHROMA_DB_DIR)
+        return _chroma_client
+
+
+def close_chroma_client() -> None:
+    """Close the shared ChromaDB client and release its sqlite handle.
+
+    Call from application shutdown. Important on Windows, where a leaked sqlite
+    file lock from a previous run can make the next PersistentClient
+    construction fail. Guarded against ChromaDB's ``del self.bindings``
+    AttributeError, which can fire from its teardown when a system that never
+    finished starting (or was already stopped) is stopped again.
+    """
+    global _chroma_client
+    with _chroma_lock:
+        client, _chroma_client = _chroma_client, None
+        if client is None:
+            return
+        close = getattr(client, "close", None)
+        if not callable(close):
+            return
         try:
-            _chroma_client = chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
-        except KeyError:
-            # Workaround for ChromaDB 0.5.x bug: SharedSystemClient can
-            # leave its _identifier_to_system cache in an inconsistent state,
-            # causing a KeyError on the return path.  Clearing the cache and
-            # retrying resolves the issue.
-            logger.warning("ChromaDB SharedSystemClient cache inconsistency detected, retrying")
-            from chromadb.api.shared_system_client import SharedSystemClient
-            SharedSystemClient.clear_system_cache()
-            _chroma_client = chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
-        logger.info("ChromaDB PersistentClient initialised at %s", settings.CHROMA_DB_DIR)
-    return _chroma_client
+            close()
+        except AttributeError:
+            logger.debug("Ignoring ChromaDB teardown AttributeError on close", exc_info=True)
+        except Exception:
+            logger.debug("ChromaDB client close failed", exc_info=True)
 
 
 # -------------------------------------------------------------------
