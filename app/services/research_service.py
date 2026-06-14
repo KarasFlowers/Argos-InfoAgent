@@ -136,7 +136,7 @@ async def _assess_sufficiency(
 
 async def _decompose(question: str, max_sub_queries: int) -> list[str]:
     """Use the fast LLM to decompose a research question into sub-queries."""
-    prompt = get_prompt("research_decompose", question=question, max_sub_queries=max_sub_queries)
+    prompt = get_prompt("research_decompose", max_sub_queries=max_sub_queries)
     try:
         response = await llm_service.llm.chat(
             messages=[
@@ -224,7 +224,7 @@ async def _synthesize(
     for i, f in enumerate(findings):
         findings_text += f"\n### Sub-query {i+1}: {f['query']}\n{f['summary']}\n"
 
-    prompt = get_prompt("research_synthesize", question=question)
+    prompt = get_prompt("research_synthesize")
 
     try:
         response = await llm_service.llm.chat(

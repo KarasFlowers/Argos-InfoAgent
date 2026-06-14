@@ -662,8 +662,10 @@
                         </div>
 
                         <div class="form-group">
-                            <label>自定义系统提示词 <small>覆盖默认指令</small></label>
-                            <textarea id="board-prompt" placeholder="给 AI 的系统级指令，例如：你是一个英语老师..." style="height: 60px;"></textarea>
+                            <label>板块补充指令 <small>注入到所选模板中，不再覆盖模板结构</small></label>
+                            <textarea id="board-prompt" placeholder="补充要求，如：多关注开源项目动态、每篇加一句编辑点评..." style="height: 60px;"></textarea>
+                            <button type="button" class="secondary-btn" style="margin-top:0.5rem;font-size:0.8rem;" onclick="previewBoardPrompt()">预览最终 Prompt</button>
+                            <div id="board-prompt-preview" class="board-prompt-preview" style="display:none;margin-top:0.5rem;"></div>
                         </div>
 
                         <div class="form-group-row">

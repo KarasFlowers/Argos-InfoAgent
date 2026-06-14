@@ -21,7 +21,26 @@ logger = logging.getLogger(__name__)
 # Prompts for AI semantic dedup
 # ---------------------------------------------------------------------------
 
-TOPIC_DEDUP_SYSTEM = get_prompt("semantic_dedup")
+# Lazily resolved: avoid importing get_prompt at module load so a missing/
+# malformed template file doesn't break the whole dedup module (and every
+# downstream caller). Falls back to a minimal inline prompt if the template
+# is unavailable.
+_DEDUP_FALLBACK_SYSTEM = (
+    "You are a deduplication assistant. Given a numbered list of news items "
+    "(title, summary), identify groups covering the SAME event. "
+    'Return {"duplicates": [[primary_index, dup_index, ...]]}. '
+    "Items not duplicating anything must not appear. Output ONLY the JSON."
+)
+
+
+def _topic_dedup_system() -> str:
+    """Return the semantic-dedup system prompt, loaded on first use."""
+    try:
+        return get_prompt("semantic_dedup")
+    except (FileNotFoundError, Exception) as exc:  # noqa: BLE001
+        logger.warning("semantic_dedup prompt unavailable, using fallback: %s", exc)
+        return _DEDUP_FALLBACK_SYSTEM
+
 
 TOPIC_DEDUP_USER = (
     "Here are the items:\n\n{items}"
@@ -158,7 +177,7 @@ async def merge_topic_duplicates(
     try:
         response = await llm_client.chat(
             messages=[
-                {"role": "system", "content": TOPIC_DEDUP_SYSTEM},
+                {"role": "system", "content": _topic_dedup_system()},
                 {"role": "user", "content": TOPIC_DEDUP_USER.format(items=items_text)},
             ],
             tier="fast",
