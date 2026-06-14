@@ -89,7 +89,18 @@ class Settings(BaseSettings):
         return self.LLM_API_KEY or self.DEEPSEEK_API_KEY
 
     @property
-    def effective_llm_base_url(self) -> str:
+    def effective_llm_base_url(self) -> str | None:
+        """Return the configured base URL.
+
+        When the user has set LLM_API_KEY (the generic config), only
+        LLM_BASE_URL is honoured — we do NOT fall back to DeepSeek's URL,
+        because that would silently send a third-party API key to DeepSeek.
+
+        When LLM_API_KEY is unset, the legacy DEEPSEEK_* variables are used
+        as a consistent fallback for both key and URL.
+        """
+        if self.LLM_API_KEY:
+            return self.LLM_BASE_URL or None
         return self.LLM_BASE_URL or self.DEEPSEEK_BASE_URL
     
     # Database
@@ -107,19 +118,7 @@ class Settings(BaseSettings):
     EMAIL_SUBSCRIBERS: list[str] = []
     DAILY_PUSH_TIME: str = "08:00"  # Format HH:MM
 
-    # Webhook Notification
-    WEBHOOK_URL: str | None = None            # Generic webhook (POST JSON)
-    WEBHOOK_SECRET: str | None = None         # Optional HMAC signing key
-
-    # Bark Push (iOS)
-    BARK_URL: str | None = None               # e.g. https://api.day.app/YOUR_KEY
-    BARK_GROUP: str = "Argos"
-
-    # Telegram Bot
-    TELEGRAM_BOT_TOKEN: str | None = None
-    TELEGRAM_CHAT_ID: str | None = None
-
-    # Notification channels to enable (comma-separated: email,webhook,bark,telegram)
+    # Notification (email only)
     NOTIFY_CHANNELS: str = "email"
     
     # RAG Feature Toggle (set to false to skip heavy model downloads)

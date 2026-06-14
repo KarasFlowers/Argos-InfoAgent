@@ -73,6 +73,8 @@ venv.bak/
 # Runtime data
 data/chroma/
 data/sqlite/*.db
+data/sqlite/*.db-wal
+data/sqlite/*.db-shm
 data/sqlite/*.sqlite3
 data/cmd_config.json
 data/dashboard.zip

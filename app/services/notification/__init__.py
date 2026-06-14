@@ -1,15 +1,11 @@
 """
 Notification sub-package.
 
-Provides a pluggable multi-channel notification system:
-- Email (SMTP)
-- Webhook (generic HTTP POST with optional HMAC)
-- Bark (iOS push)
-- Telegram Bot
+Provides email notification for daily summaries.
 
 Usage:
     from app.services.notification import notify_service
-    await notify_service.send(summary, channels=["email", "bark"])
+    await notify_service.send(summary)
 """
 
 from app.services.notification.dispatcher import NotificationDispatcher

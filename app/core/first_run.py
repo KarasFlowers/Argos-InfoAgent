@@ -39,19 +39,18 @@ def ensure_env() -> None:
         print("  .env file not found. Creating from template...")
         print()
 
-        api_key = input("  Enter your LLM API key (or press Enter to skip): ").strip()
+        api_key = input("  Enter your DeepSeek API key (or press Enter to skip): ").strip()
 
         shutil.copy2(ENV_TEMPLATE, ENV_FILE)
 
         if api_key:
             text = ENV_FILE.read_text(encoding="utf-8")
-            text = text.replace("sk-your-api-key-here", api_key)
-            text = text.replace("sk-your-deepseek-api-key-here", api_key)
+            text = text.replace('DEEPSEEK_API_KEY=""', f'DEEPSEEK_API_KEY="{api_key}"')
             ENV_FILE.write_text(text, encoding="utf-8")
-            print(f"  ✓ .env created with your API key.")
+            print(f"  ✓ .env created with your DeepSeek API key.")
         else:
             print(f"  ✓ .env created from template.")
-            print(f"  ⚠ Please edit {ENV_FILE} and set LLM_API_KEY before using LLM features.")
+            print(f"  ⚠ Please edit {ENV_FILE} and set DEEPSEEK_API_KEY or LLM_API_KEY before using LLM features.")
         print()
     else:
         # Non-interactive (e.g. Docker, systemd) — silent copy

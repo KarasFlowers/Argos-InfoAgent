@@ -46,10 +46,6 @@ _DEFAULT_MARKETING_PATTERNS: list[re.Pattern[str]] = [
 _MIN_TITLE_LENGTH = 10  # characters
 _MIN_CONTENT_LENGTH = 80  # characters (RSS excerpt + full_text combined)
 
-# Domains known for low-quality / clickbait content
-_DEFAULT_LOW_QUALITY_DOMAINS: set[str] = set()  # empty by default; populated via config
-
-
 class FilteringResult:
     """Result of applying rule-based filters to a list of ContentItems."""
 
@@ -99,8 +95,6 @@ async def apply_rule_filters(
         reason = _check_blacklist(item, blacklist_rules)
         if not reason:
             reason = _check_low_signal(item)
-        if not reason:
-            reason = _check_low_quality_domain(item)
 
         if reason:
             filtered.append((item, reason))
@@ -180,19 +174,3 @@ def _check_low_signal(item: ContentItem) -> str | None:
     return None
 
 
-def _check_low_quality_domain(item: ContentItem) -> str | None:
-    """Check if the item's URL belongs to a known low-quality domain."""
-    if not _DEFAULT_LOW_QUALITY_DOMAINS:
-        return None
-
-    from urllib.parse import urlparse
-    try:
-        host = urlparse(item.url).hostname or ""
-        if host.startswith("www."):
-            host = host[4:]
-        if host in _DEFAULT_LOW_QUALITY_DOMAINS:
-            return f"low_quality_domain:{host}"
-    except Exception:
-        pass
-
-    return None

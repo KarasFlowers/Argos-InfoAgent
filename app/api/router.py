@@ -292,43 +292,6 @@ async def list_task_runs(
     ]
 
 
-@api_router.get("/admin/sources/health")
-async def list_source_health(session: AsyncSession = Depends(get_session)):
-    """List all sources with their current health status."""
-    from app.services.source_health_service import get_all_source_health
-    return await get_all_source_health(session)
-
-
-@api_router.get("/admin/sources/{source_id}/health_log")
-async def get_source_health_log_endpoint(
-    source_id: int,
-    limit: int = Query(default=20, ge=1, le=100),
-    session: AsyncSession = Depends(get_session),
-):
-    """Get recent health check log for a specific source."""
-    from app.services.source_health_service import get_source_health_log
-    return await get_source_health_log(session, source_id, limit=limit)
-
-
-@api_router.get("/sources/dashboard")
-async def get_source_dashboard_endpoint(
-    board: Optional[str] = None,
-    days: int = Query(default=7, ge=1, le=30),
-    limit: int = Query(default=50, ge=1, le=200),
-    session: AsyncSession = Depends(get_session),
-):
-    """Source health + quality dashboard for the current board."""
-    from app.services.source_insights_service import get_source_coverage_analysis, get_source_dashboard
-
-    board_obj = await _resolve_board(session, board)
-    board_id = board_obj.id if board_obj else None
-    dashboard = await get_source_dashboard(session, board_id=board_id, days=days, limit=limit)
-    coverage = await get_source_coverage_analysis(session, board_id=board_id, days=min(days, 3), limit=3)
-    return {
-        "board": board_obj.slug if board_obj else "default",
-        **dashboard,
-        "coverage_preview": coverage,
-    }
 
 
 @api_router.get("/sources/coverage")
@@ -900,7 +863,8 @@ async def _backfill_gap_days(board_id: int | None, board_slug: str, max_days: in
 def _trigger_catchup_backfill(board_id: int | None, board_slug: str, max_days: int) -> None:
     """Fire-and-forget: schedule gap-day backfill without blocking the request."""
     try:
-        asyncio.create_task(_backfill_gap_days(board_id, board_slug, max_days))
+        from app.core.background import register_background_task
+        register_background_task(asyncio.create_task(_backfill_gap_days(board_id, board_slug, max_days)))
     except RuntimeError:
         logger.debug("No running loop for catchup backfill; skipped")
 
@@ -970,7 +934,7 @@ async def generate_summary(
                         board_id=board_id,
                     )
                 except Exception:
-                    pass
+                    logger.debug("Persona reranking skipped for cached summary")
                 try:
                     await _mark_items_read(session, existing_summary.top_news, board_id)
                 except Exception:
@@ -1285,7 +1249,7 @@ async def get_daily_briefing(
     try:
         events = await _build_briefing_events(session, board_id, existing.top_news, search_date)
     except Exception:
-        pass  # clustering not yet populated — graceful skip
+        logger.debug("Briefing event clustering skipped (not yet populated)")
 
     source_analysis = {"date": search_date, "lookback_days": 3, "items": []}
     try:
@@ -1298,7 +1262,7 @@ async def get_daily_briefing(
             limit=4,
         )
     except Exception:
-        pass
+        logger.debug("Source coverage analysis skipped for briefing")
 
     return {
         "date": existing.date,
@@ -2129,6 +2093,7 @@ async def _probe_common_feed_paths(homepage: str, limit: int = 2) -> list[str]:
             return []
         root = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
     except Exception:
+        logger.debug("URL root extraction failed for homepage: %s", homepage)
         return []
 
     found: list[str] = []
@@ -2766,7 +2731,6 @@ async def get_board_source_alternatives_endpoint(
     from app.models.domain import Source
     from app.services.source_insights_service import (
         annotate_source_validation,
-        get_source_dashboard,
         review_source_candidates,
         score_source_quality,
         summarize_source_risk,
@@ -2787,25 +2751,19 @@ async def get_board_source_alternatives_endpoint(
     if not source:
         raise HTTPException(status_code=404, detail="Source not found.")
 
-    dashboard = await get_source_dashboard(session, board_id=board.id, limit=200)
-    source_snapshot = next(
-        (entry for entry in (dashboard.get("sources") or []) if entry.get("id") == source.id),
-        None,
-    )
-    if not source_snapshot:
-        serialized = _serialize_source(source)
-        serialized.update(
-            score_source_quality(
-                url=serialized["url"],
-                source_type=serialized["source_type"],
-                credibility_override=serialized["credibility_override"],
-                health_status=serialized["health_status"],
-            )
+    serialized = _serialize_source(source)
+    serialized.update(
+        score_source_quality(
+            url=serialized["url"],
+            source_type=serialized["source_type"],
+            credibility_override=serialized["credibility_override"],
+            health_status=serialized["health_status"],
         )
-        source_snapshot = {
-            **serialized,
-            **summarize_source_risk(serialized),
-        }
+    )
+    source_snapshot = {
+        **serialized,
+        **summarize_source_risk(serialized),
+    }
 
     topic = _build_source_topic(board, source.name or source.url)
     raw_groups = await llm_service.suggest_alternative_feeds(topic=topic, broken_urls=[source.url])

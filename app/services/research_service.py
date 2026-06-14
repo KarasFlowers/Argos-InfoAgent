@@ -162,16 +162,18 @@ async def _gather_evidence(query: str, top_k: int = 5) -> dict[str, Any]:
     """Search RAG corpus and optionally web for evidence on a sub-query."""
     sources: list[dict[str, str]] = []
 
-    # RAG search
+    # RAG search (uses cross-article retrieval when RAG is enabled)
     try:
-        from app.services.rag_service import rag_service
-        rag_results = await rag_service.query(query, top_k=top_k)
-        for doc in rag_results:
+        from app.services.rag_service import query_cross_article
+        chunks: list[str] = []
+        async for chunk in query_cross_article(query, top_k_per_collection=top_k, top_k_final=top_k):
+            chunks.append(chunk)
+        if chunks:
             sources.append({
                 "type": "rag",
-                "title": doc.get("title", ""),
-                "content": doc.get("content", "")[:500],
-                "url": doc.get("url", ""),
+                "title": query,
+                "content": "".join(chunks)[:500],
+                "url": "",
             })
     except Exception as exc:
         logger.warning("RAG search failed for sub-query '%s': %s", query, exc)

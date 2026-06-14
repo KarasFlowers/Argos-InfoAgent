@@ -40,9 +40,24 @@ def _repair_json(text: str) -> str:
     return text
 
 
-def _get_editor_prompt() -> str:
-    """Load the daily briefing editor prompt from external template."""
-    return get_prompt("daily_briefing")
+def _get_editor_prompt(board=None) -> str:
+    """Load the editor prompt template for the given board.
+
+    Uses ``board.prompt_key`` to select the template, falling back to
+    ``"daily_briefing"`` when the key is empty or invalid. Also passes board
+    context as template variables so custom prompts can reference them.
+    """
+    prompt_key = (getattr(board, "prompt_key", None) or "daily_briefing").strip() or "daily_briefing"
+    variables: dict = {"date": datetime.now().strftime("%Y-%m-%d")}
+    if board:
+        variables["board_name"] = board.name
+        variables["board_description"] = board.description
+        variables["output_language"] = board.output_language
+    try:
+        return get_prompt(prompt_key, **variables)
+    except FileNotFoundError:
+        logger.warning("Prompt template '%s' not found; falling back to daily_briefing", prompt_key)
+        return get_prompt("daily_briefing", **variables)
 
 
 def _build_fallback_summary(
@@ -137,8 +152,8 @@ class SummaryMixin:
             return None, {}
 
         board_id = board.id if board else None
-        _editor_prompt = _get_editor_prompt()
-        base_prompt = (board.system_prompt or _editor_prompt) if board else _editor_prompt
+        _editor_prompt = _get_editor_prompt(board)
+        base_prompt = board.system_prompt if board and board.system_prompt else _editor_prompt
         schema_suffix = (
             "\n\nIMPORTANT: You MUST output a valid JSON object matching exactly this schema "
             "(no markdown fences, no extra keys at the top level):\n"
@@ -428,7 +443,7 @@ class SummaryMixin:
                     # Fallback: use the default prompt with a perspective prefix
                     perspective_prompt = (
                         f"You are writing a **{perspective_name}** perspective of today's tech news.\n\n"
-                        + _get_editor_prompt()
+                        + _get_editor_prompt(board)
                     )
 
                 schema_suffix = (
