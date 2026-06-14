@@ -153,24 +153,6 @@ class Source(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class PromptConfig(SQLModel, table=True):
-    """Hot-reloadable prompt template, replacing app/prompts/*.md files."""
-    model_config = ConfigDict(protected_namespaces=())
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    key: str = Field(index=True, unique=True)         # e.g. "daily_briefing", "quality_scoring"
-    template: str = Field(sa_column=Column(Text, nullable=False))  # prompt body
-    system_prompt: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))  # optional system prefix
-    temperature: float = Field(default=0.3)
-    max_tokens: int = Field(default=4000)
-    model_api_config_id: Optional[int] = Field(
-        default=None, foreign_key="modelapiconfig.id", ondelete="SET NULL"
-    )  # null = use default tier
-    is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: Optional[datetime] = Field(default=None)
-
-
 class ModelApiConfig(SQLModel, table=True):
     """LLM provider configuration, replacing environment variable multi-tier setup."""
     model_config = ConfigDict(protected_namespaces=())
@@ -246,22 +228,6 @@ class FilteredItem(SQLModel, table=True):
     board_id: Optional[int] = Field(default=None, foreign_key="board.id", ondelete="CASCADE", index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     reviewed_at: Optional[datetime] = Field(default=None)
-
-
-# ---------------------------------------------------------------------------
-# Source Health Monitoring (P2 3.2)
-# ---------------------------------------------------------------------------
-
-
-class SourceHealthLog(SQLModel, table=True):
-    """A single health-check record for an RSS/data source."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    source_id: int = Field(foreign_key="source.id", ondelete="CASCADE", index=True)
-    status: str = Field(default="ok")                # "ok" | "error" | "timeout"
-    status_code: Optional[int] = Field(default=None)  # HTTP status code
-    error_message: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))
-    response_time_ms: Optional[int] = Field(default=None)
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------

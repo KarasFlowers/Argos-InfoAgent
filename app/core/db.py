@@ -9,18 +9,25 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.SQLALCHEMY_DATABASE_URI,
     echo=False,
-    connect_args={"check_same_thread": False}
+    connect_args={
+        "check_same_thread": False,
+        "timeout": 30,  # seconds to wait for a write lock before giving up
+    },
 )
 
 
 # SQLite does not enforce foreign keys (and therefore ondelete="CASCADE") by
 # default. Turn it on for every new DBAPI connection so referential integrity
 # and cascading deletes match what the models declare.
+# Also enable WAL journal mode — allows concurrent reads while a write is in
+# progress, dramatically reducing "database is locked" errors under the
+# APScheduler's multi-threaded write pattern.
 @event.listens_for(engine.sync_engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+def _configure_sqlite(dbapi_connection, connection_record):
     try:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
     except Exception:
         # Not a SQLite connection (or pragma unsupported). Silently ignore.
@@ -303,22 +310,6 @@ async def _migrate_phase2_schema(conn) -> None:
             "ALTER TABLE dailysummary ADD COLUMN perspective TEXT NOT NULL DEFAULT 'overview'"
         )
 
-    # Update unique constraint: drop old, create new (board_id, date, perspective)
-    indexes = await conn.exec_driver_sql("PRAGMA index_list(dailysummary)")
-    existing_indexes = {row[1] for row in indexes.fetchall()}
-    if "ux_dailysummary_board_date" in existing_indexes:
-        await conn.exec_driver_sql("DROP INDEX IF EXISTS ux_dailysummary_board_date")
-    if "ux_dailysummary_board_date_perspective" not in existing_indexes:
-        try:
-            await conn.exec_driver_sql(
-                "CREATE UNIQUE INDEX ux_dailysummary_board_date_perspective "
-                "ON dailysummary(board_id, date, perspective)"
-            )
-        except Exception:
-            # Keep startup tolerant of legacy duplicate rows; stricter cleanup can
-            # be handled by a dedicated data migration instead of bricking boot.
-            pass
-
     # --- NewsItem.topic_path ---
     cols = await conn.exec_driver_sql("PRAGMA table_info(newsitem)")
     col_names = {row[1] for row in cols.fetchall()}
@@ -488,39 +479,6 @@ async def _backfill_article_read_state(conn) -> None:
             )
 
 
-async def _seed_default_prompt_configs(conn) -> None:
-    """Seed the PromptConfig table from app/prompts/*.md files on first run.
-
-    Only runs when the PromptConfig table is empty.
-    """
-    import os as _os
-
-    count_row = await conn.exec_driver_sql("SELECT COUNT(*) FROM promptconfig")
-    existing = count_row.fetchone()[0]
-    if existing > 0:
-        return
-
-    prompts_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "app", "prompts")
-    if not _os.path.isdir(prompts_dir):
-        return
-
-    for filename in _os.listdir(prompts_dir):
-        if not filename.endswith(".md") or filename.startswith("_"):
-            continue
-        key = filename[:-3]  # strip .md
-        filepath = _os.path.join(prompts_dir, filename)
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                template = f.read()
-            await conn.exec_driver_sql(
-                "INSERT INTO promptconfig (key, template, temperature, max_tokens, is_active, created_at) "
-                "VALUES (?, ?, 0.3, 4000, 1, CURRENT_TIMESTAMP)",
-                (key, template),
-            )
-        except Exception:
-            pass  # Skip files that can't be read
-
-
 async def _seed_default_model_api_configs(conn) -> None:
     """Seed the ModelApiConfig table from environment variables on first run.
 
@@ -584,13 +542,11 @@ async def init_db():
             UserMemory,
             ArticleOverview,
             Source,
-            PromptConfig,
             ModelApiConfig,
             TaskRun,
             ContentCluster,
             BlacklistKeyword,
             FilteredItem,
-            SourceHealthLog,
             DailyReportRefinementSession,
             SummaryViewLog,
             ArticleReadState,
@@ -606,7 +562,6 @@ async def init_db():
         await _seed_default_sources(conn)
         await _sync_sources_from_board_configs(conn)
         await _backfill_article_read_state(conn)
-        await _seed_default_prompt_configs(conn)
         await _seed_default_model_api_configs(conn)
 
 

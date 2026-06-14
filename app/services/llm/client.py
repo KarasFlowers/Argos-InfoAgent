@@ -129,7 +129,7 @@ class LLMClient:
 
     def __init__(self, settings: Any) -> None:
         self.model: str = settings.LLM_MODEL
-        self._default_base_url: str = settings.effective_llm_base_url
+        self._default_base_url: str | None = settings.effective_llm_base_url
         self._default_api_key: str | None = settings.effective_llm_api_key
         self._timeout: float = float(settings.LLM_TIMEOUT)
         self._max_retries: int = settings.LLM_MAX_RETRIES

@@ -16,13 +16,11 @@ from app.models.domain import (  # noqa: F401
     UserMemory,
     ArticleOverview,
     Source,
-    PromptConfig,
     ModelApiConfig,
     TaskRun,
     ContentCluster,
     BlacklistKeyword,
     FilteredItem,
-    SourceHealthLog,
     DailyReportRefinementSession,
 )
 

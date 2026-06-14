@@ -8,13 +8,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from app.models.domain import ContentCluster, DailySummary, NewsItem, Source, SourceHealthLog
+from app.models.domain import ContentCluster, DailySummary, NewsItem, Source
 from app.api import router
-from app.services.source_health_service import log_source_health
 from app.services.source_insights_service import (
     annotate_source_validation,
     get_source_coverage_analysis,
-    get_source_dashboard,
     prioritize_source_candidates,
     review_source_candidates,
 )
@@ -84,157 +82,6 @@ async def _make_summary_item(
     await session.commit()
     await session.refresh(item)
     return item
-
-
-@pytest.mark.anyio
-async def test_log_source_health_tracks_degraded_unhealthy_and_recovery(isolated_session):
-    source = Source(url="https://example.com/feed.xml", source_type="rss", enabled=True, health_status="healthy")
-    isolated_session.add(source)
-    await isolated_session.commit()
-    await isolated_session.refresh(source)
-
-    await log_source_health(isolated_session, source.id, status="error", error_message="boom")
-    refreshed = await isolated_session.get(Source, source.id)
-    assert refreshed.health_status == "degraded"
-    assert refreshed.last_error == "boom"
-
-    await log_source_health(isolated_session, source.id, status="timeout", error_message="slow")
-    await log_source_health(isolated_session, source.id, status="error", error_message="still bad")
-    refreshed = await isolated_session.get(Source, source.id)
-    assert refreshed.health_status == "unhealthy"
-
-    await log_source_health(isolated_session, source.id, status="ok", response_time_ms=320)
-    refreshed = await isolated_session.get(Source, source.id)
-    assert refreshed.health_status == "healthy"
-    assert refreshed.last_error == ""
-    assert refreshed.last_fetched_at is not None
-
-
-@pytest.mark.anyio
-async def test_source_dashboard_reports_recent_health_and_article_counts(isolated_session):
-    board = await _make_board(isolated_session, "sources")
-    source = Source(
-        url="https://feeds.arstechnica.com/arstechnica/index",
-        name="Ars Technica",
-        source_type="rss",
-        enabled=True,
-        board_id=board.id,
-        health_status="healthy",
-    )
-    isolated_session.add(source)
-    await isolated_session.commit()
-    await isolated_session.refresh(source)
-
-    await log_source_health(isolated_session, source.id, status="ok", response_time_ms=180)
-    cluster = ContentCluster(fingerprint="ars-1", title="GPU launch", item_count=2, item_ids=[], board_id=board.id)
-    isolated_session.add(cluster)
-    await isolated_session.commit()
-    await isolated_session.refresh(cluster)
-
-    item1 = await _make_summary_item(
-        isolated_session,
-        board.id,
-        "2026-06-08",
-        headline="GPU launch day",
-        url="https://arstechnica.com/gadgets/2026/06/gpu-launch/",
-        source_name="Ars Technica",
-        cluster_id=cluster.id,
-        tags=["gpu", "launch"],
-        key_points=["Benchmarks focus on gaming performance."],
-    )
-    item2 = await _make_summary_item(
-        isolated_session,
-        board.id,
-        "2026-06-07",
-        headline="GPU launch follow-up",
-        url="https://arstechnica.com/gadgets/2026/06/gpu-launch-follow-up/",
-        source_name="Ars Technica",
-        cluster_id=cluster.id,
-        tags=["gpu", "supply"],
-        key_points=["Follow-up coverage emphasized stock availability."],
-    )
-    cluster.item_ids = [item1.id, item2.id]
-    await isolated_session.commit()
-
-    dashboard = await get_source_dashboard(isolated_session, board_id=board.id, days=7)
-
-    assert dashboard["summary"]["healthy_sources"] == 1
-    assert dashboard["sources"][0]["recent_article_count"] == 2
-    assert dashboard["sources"][0]["recent_event_count"] == 1
-    assert dashboard["sources"][0]["trust_score"] > 60
-    assert dashboard["sources"][0]["risk_summary"]
-    assert dashboard["sources"][0]["recommended_action"]
-    assert dashboard["top_domains"][0]["domain"] == "arstechnica.com"
-
-
-@pytest.mark.anyio
-async def test_source_dashboard_respects_manual_credibility_override(isolated_session):
-    board = await _make_board(isolated_session, "credibility")
-    source = Source(
-        url="https://community.example/feed.xml",
-        name="Community Feed",
-        source_type="rss",
-        enabled=True,
-        board_id=board.id,
-        health_status="healthy",
-        credibility_override="risky",
-    )
-    isolated_session.add(source)
-    await isolated_session.commit()
-    await isolated_session.refresh(source)
-
-    dashboard = await get_source_dashboard(isolated_session, board_id=board.id, days=7)
-
-    assert dashboard["summary"]["manual_override_sources"] == 1
-    assert dashboard["summary"]["risky_sources"] == 1
-    assert dashboard["sources"][0]["credibility_override"] == "risky"
-    assert dashboard["sources"][0]["trust_label"] == "risky"
-
-
-@pytest.mark.anyio
-async def test_source_dashboard_includes_health_timeline_and_recent_movements(isolated_session):
-    board = await _make_board(isolated_session, "timeline")
-    source = Source(
-        url="https://timeline.example/feed.xml",
-        name="Timeline Feed",
-        source_type="rss",
-        enabled=True,
-        board_id=board.id,
-        health_status="healthy",
-    )
-    isolated_session.add(source)
-    await isolated_session.commit()
-    await isolated_session.refresh(source)
-
-    now = datetime.now(UTC)
-    isolated_session.add_all(
-        [
-            SourceHealthLog(
-                source_id=source.id,
-                status="error",
-                error_message="timeout yesterday",
-                checked_at=now - timedelta(days=1, hours=2),
-            ),
-            SourceHealthLog(
-                source_id=source.id,
-                status="ok",
-                response_time_ms=210,
-                checked_at=now - timedelta(hours=1),
-            ),
-        ]
-    )
-    await isolated_session.commit()
-
-    dashboard = await get_source_dashboard(isolated_session, board_id=board.id, days=3)
-
-    assert len(dashboard["health_timeline"]) == 3
-    assert any((day["checks"] or 0) > 0 for day in dashboard["health_timeline"])
-    assert dashboard["recent_movements"]
-    assert dashboard["recent_movements"][0]["movement"] == "recovered"
-    source_entry = next(item for item in dashboard["sources"] if item["id"] == source.id)
-    assert source_entry["recent_statuses"][0]["status"] == "ok"
-    assert source_entry["recent_statuses"][1]["status"] == "error"
-    assert source_entry["latest_movement"] == "recovered"
 
 
 @pytest.mark.anyio

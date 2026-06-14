@@ -34,7 +34,7 @@ async def fetch_and_parse_feed(url: str, client: httpx.AsyncClient) -> RSSRespon
         response.raise_for_status()
 
         # Log healthy fetch
-        await _log_health(url, status="ok", status_code=response.status_code, response_time_ms=elapsed_ms)
+        await _log_health(url, status="ok")
         
         # Parse the XML using feedparser
         # Pass raw bytes so feedparser can detect encoding from XML declaration
@@ -86,7 +86,7 @@ async def fetch_and_parse_feed(url: str, client: httpx.AsyncClient) -> RSSRespon
         await _log_health(url, status="timeout", error_message=str(e))
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error fetching feed {url}: {e}")
-        await _log_health(url, status="error", status_code=e.response.status_code, error_message=str(e))
+        await _log_health(url, status="error", error_message=str(e))
     except httpx.HTTPError as e:
         logger.error(f"HTTP error fetching feed {url}: {e}")
         await _log_health(url, status="error", error_message=str(e))
@@ -101,30 +101,33 @@ async def _log_health(
     url: str,
     *,
     status: str = "ok",
-    status_code: int | None = None,
     error_message: str = "",
-    response_time_ms: int | None = None,
 ) -> None:
-    """Best-effort: record source health. Silently skip if source not in DB."""
+    """Best-effort: update source health fields directly. Silently skip if source not in DB."""
     try:
+        from datetime import datetime, UTC
         from app.core.db import AsyncSessionLocal
         from app.models.domain import Source
-        from app.services.source_health_service import log_source_health
         from sqlalchemy import select
 
         async with AsyncSessionLocal() as session:
             stmt = select(Source).where(Source.url == url).limit(1)
             result = await session.execute(stmt)
             source = result.scalar_one_or_none()
-            if source and source.id:
-                await log_source_health(
-                    session,
-                    source.id,
-                    status=status,
-                    status_code=status_code,
-                    error_message=error_message,
-                    response_time_ms=response_time_ms,
-                )
+            if source:
+                now = datetime.now(UTC)
+                if status == "ok":
+                    source.last_fetched_at = now
+                    source.last_error = ""
+                    source.health_status = "healthy"
+                else:
+                    source.last_error = error_message[:500] if error_message else "unknown error"
+                    # Mark degraded on first failure, unhealthy after persisted failures
+                    if source.health_status == "healthy":
+                        source.health_status = "degraded"
+                    elif source.health_status == "degraded":
+                        source.health_status = "unhealthy"
+                await session.commit()
     except Exception as err:
         logger.debug("Source health logging skipped: %s", err)
 

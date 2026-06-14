@@ -33,6 +33,7 @@ STATIC_DIR = WEB_ROOT / "static"
 TEMPLATES_DIR = WEB_ROOT / "templates"
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
@@ -79,6 +80,10 @@ async def lifespan(app: FastAPI):
 
     logger.info("application_started")
     yield
+
+    # Cancel all tracked background tasks (e.g. catchup backfill)
+    from app.core.background import cancel_all_background_tasks
+    await cancel_all_background_tasks()
 
     # Shutdown scheduler
     shutdown_scheduler()
