@@ -534,7 +534,8 @@ async function loadPromptTemplates() {
         const res = await fetch('/api/v1/boards/prompts/templates');
         if (res.ok) {
             const data = await res.json();
-            availablePromptTemplates = data.templates || [];
+            // Prefer metadata-rich items; fall back to flat key list
+            availablePromptTemplates = (data.items && data.items.length > 0) ? data.items : (data.templates || []);
             _populatePromptDropdown();
         }
     } catch (e) {
@@ -545,12 +546,14 @@ async function loadPromptTemplates() {
 function _populatePromptDropdown() {
     const select = document.getElementById('board-prompt-key');
     if (!select || availablePromptTemplates.length === 0) return;
-    
+
     select.innerHTML = '';
     for (const tpl of availablePromptTemplates) {
         const opt = document.createElement('option');
-        opt.value = tpl;
-        opt.textContent = tpl + (tpl === 'daily_briefing' ? ' (默认)' : '');
+        const key = tpl.key || tpl;
+        const name = tpl.name || key;
+        opt.value = key;
+        opt.textContent = name + (key === 'daily_briefing' ? ' (默认)' : '');
         select.appendChild(opt);
     }
 }
@@ -1044,7 +1047,7 @@ function renderBoardConfigSummary() {
     }
 
     if (promptRaw) {
-        checklist.push(`已覆盖默认系统提示词（${promptRaw.length} 字）。`);
+        checklist.push(`已添加板块补充指令（${promptRaw.length} 字）。`);
     }
     if (scheduleRaw) {
         checklist.push(`已设置单独调度：${scheduleRaw}。`);
@@ -2128,6 +2131,53 @@ async function previewBoard() {
         setBoardPreviewLoading(`试运行失败：${e.message}`);
     } finally {
         setBoardActionState();
+    }
+}
+
+async function previewBoardPrompt() {
+    const built = buildBoardFormPayload({ forPreview: true });
+    if (!built) return;
+
+    const container = document.getElementById('board-prompt-preview');
+    if (!container) return;
+
+    container.style.display = 'block';
+    container.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem;">正在渲染最终 Prompt...</span>';
+
+    try {
+        const res = await fetch('/api/v1/boards/prompts/render', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(built.payload),
+        });
+        if (!res.ok) {
+            const msg = await res.text();
+            throw new Error(msg || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+
+        let html = '<div style="font-size:0.75rem;line-height:1.5;max-height:400px;overflow-y:auto;background:var(--bg-secondary);border-radius:6px;padding:0.75rem;margin-top:0.4rem;font-family:monospace;white-space:pre-wrap;word-break:break-word;">';
+        html += '<div style="margin-bottom:0.5rem;color:var(--accent-color);font-weight:600;">System Prompt</div>';
+        html += `<div style="margin-bottom:1rem;">${escapeHtml((data.messages || [])[0]?.content || '(empty)')}</div>`;
+        html += '<div style="margin-bottom:0.5rem;color:var(--accent-color);font-weight:600;">User Message (template)</div>';
+        html += `<div>${escapeHtml((data.messages || [])[1]?.content || '(empty)')}</div>`;
+        html += '</div>';
+
+        const meta = [];
+        if (data.template?.key) meta.push(`模板: ${escapeHtml(data.template.key)}`);
+        if (data.template?.version) meta.push(`v${escapeHtml(data.template.version)}`);
+        meta.push(`约 ${data.estimated_chars || 0} 字符`);
+        html += `<div style="font-size:0.7rem;color:var(--text-secondary);margin-top:0.3rem;">${meta.join(' · ')}</div>`;
+
+        if (data.warnings && data.warnings.length > 0) {
+            html += '<div style="font-size:0.75rem;color:#e6a23c;margin-top:0.4rem;">';
+            data.warnings.forEach(w => { html += `⚠ ${escapeHtml(w)}<br>`; });
+            html += '</div>';
+        }
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = `<span style="color:#f56c6c;font-size:0.8rem;">预览失败：${escapeHtml(e.message)}</span>`;
     }
 }
 

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import get_session
 from app.models.schemas import DailySummaryResponse, RSSResponse, SummaryHistoryResponse
+from app.prompts import is_prompt_selectable, list_prompt_templates
 from app.services.db_service import db_service
 from app.services.learning_service import get_inferred_interests, rerank_summary_items
 from app.services.dedup_service import normalize_url
@@ -1690,6 +1691,23 @@ def _validate_rss_feed_urls_in_config(source_type: str, source_config: dict) -> 
         _normalize_source_url_or_400(feed_url)
 
 
+def _validate_board_prompt_key_or_400(prompt_key: str | None) -> str:
+    """Validate that ``prompt_key`` refers to an existing, user-selectable
+    ``board_summary`` template.  Normalise empty / None to ``"daily_briefing"``
+    and raise HTTP 400 on invalid keys.
+    """
+    key = (prompt_key or "").strip() or "daily_briefing"
+    if not is_prompt_selectable(key):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Prompt key '{key}' is not a valid board summary template. "
+                "Choose a template from GET /boards/prompts/templates."
+            ),
+        )
+    return key
+
+
 async def _run_board_preview_runtime(
     board,
     session: AsyncSession,
@@ -1758,6 +1776,7 @@ async def create_board(
     if existing:
         raise HTTPException(status_code=409, detail=f"Board '{payload.slug}' already exists.")
     _validate_board_source_payload(payload.source_type, payload.source_config)
+    payload.prompt_key = _validate_board_prompt_key_or_400(payload.prompt_key)
     board = await db_service.create_board(
         session,
         slug=payload.slug,
@@ -2484,19 +2503,96 @@ async def wizard_fix_feeds(payload: FixFeedsRequest):
 
 @api_router.get("/boards/prompts/templates")
 async def list_prompt_templates():
-    """List available prompt templates from the prompts directory."""
-    import os
-    from pathlib import Path
-    
-    prompts_dir = Path(__file__).parent.parent / "prompts"
-    templates = []
-    
-    if prompts_dir.exists():
-        for file in prompts_dir.glob("*.md"):
-            if file.is_file():
-                templates.append(file.stem)
-                
-    return {"templates": sorted(templates)}
+    """List prompt templates available for board summary generation.
+
+    Only returns templates whose frontmatter declares
+    ``type: board_summary`` and ``user_selectable: true``.
+    Internal pipeline templates (scoring, wizard, research, etc.) are excluded.
+    """
+    selectable = list_prompt_templates(
+        template_type="board_summary",
+        user_selectable=True,
+    )
+    return {
+        "templates": [m["key"] for m in selectable],
+        "items": [
+            {
+                "key": m["key"],
+                "name": m.get("name", m["key"]),
+                "description": m.get("description", ""),
+                "version": m.get("version", ""),
+                "type": m.get("type", "board_summary"),
+            }
+            for m in selectable
+        ],
+    }
+
+@api_router.post("/boards/prompts/render")
+async def render_prompt_preview(
+    payload: BoardPreviewRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Render the resolved system prompt for a board configuration without
+    calling the LLM — useful for inspecting how template variables,
+    custom instructions, schema directives, and language settings combine.
+
+    Returns the effective system message content along with a sample user
+    message template and a rough character count.
+    """
+    from app.models.domain import Board
+    from app.services.llm.summary import build_summary_prompt_preview
+
+    runtime_board = Board(
+        slug=payload.slug,
+        name=payload.name,
+        icon=payload.icon,
+        description=payload.description,
+        system_prompt=payload.system_prompt,
+        source_type=payload.source_type,
+        source_config=payload.source_config,
+        schedule=payload.schedule,
+        notify_channels=payload.notify_channels,
+        perspectives=payload.perspectives,
+        prompt_key=_validate_board_prompt_key_or_400(payload.prompt_key),
+        output_language=payload.output_language,
+    )
+
+    # Gather active personas for preview context
+    persona_preview = ""
+    if payload.original_slug:
+        try:
+            board_obj = await db_service.get_board_by_slug(session, payload.original_slug)
+            if board_obj:
+                personas = await db_service.get_active_personas(session, board_id=board_obj.id)
+                if personas:
+                    lines = [f"- [{p.category}] {p.content}" for p in personas]
+                    persona_preview = "USER PERSONALITY & PREFERENCE GUIDELINES:\n" + "\n".join(lines)
+        except Exception:
+            pass  # Persona fetch is best-effort for preview
+
+    preview = build_summary_prompt_preview(
+        runtime_board,
+        persona_context=persona_preview,
+    )
+
+    from app.prompts import get_prompt_metadata
+    meta = get_prompt_metadata(runtime_board.prompt_key or "daily_briefing")
+
+    return {
+        "prompt_key": runtime_board.prompt_key,
+        "template": {
+            "key": meta.get("key", runtime_board.prompt_key),
+            "name": meta.get("name", ""),
+            "version": meta.get("version", ""),
+        },
+        "messages": [
+            {"role": "system", "content": preview["system_prompt"]},
+            {"role": "user", "content": preview["user_prompt_template"]},
+        ],
+        "warnings": [],
+        "estimated_chars": len(preview["system_prompt"]),
+    }
+
 
 @api_router.get("/boards/{slug}")
 async def get_board(slug: str, session: AsyncSession = Depends(get_session)):
@@ -2525,6 +2621,7 @@ async def preview_board_from_payload(
 ):
     """Run preview directly from the current board form payload without saving."""
     _validate_board_source_payload(payload.source_type, payload.source_config)
+    payload.prompt_key = _validate_board_prompt_key_or_400(payload.prompt_key)
 
     from app.models.domain import Board
 
@@ -2576,6 +2673,9 @@ async def update_board(
 ):
     """Update a board's metadata/config."""
     updates = payload.model_dump(exclude_unset=True)
+    # Validate prompt_key if present in the update
+    if "prompt_key" in updates and updates["prompt_key"] is not None:
+        updates["prompt_key"] = _validate_board_prompt_key_or_400(updates["prompt_key"])
     existing_board = None
     if "source_type" in updates or ("source_config" in updates and updates["source_config"] is not None):
         existing_board = await db_service.get_board_by_slug(session, slug)

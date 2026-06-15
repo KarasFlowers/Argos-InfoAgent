@@ -166,7 +166,7 @@ class WizardMixin:
             params = ", ".join(r["params"])
             lines.append(f'- {r["platform"]}（{r["label"]}）参数: {params}；示例: {r["example"]}')
         catalog = "\n".join(lines)
-        return get_prompt("board_wizard_plan").replace("{rsshub_routes}", catalog)
+        return get_prompt("board_wizard_plan", rsshub_routes=catalog)
 
     @staticmethod
     def _normalize_plan(parsed: dict) -> dict:

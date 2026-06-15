@@ -40,12 +40,16 @@ def _repair_json(text: str) -> str:
     return text
 
 
-def _get_editor_prompt(board=None) -> str:
+def _get_editor_prompt(board=None, *, custom_instructions: str | None = None) -> str:
     """Load the editor prompt template for the given board.
 
     Uses ``board.prompt_key`` to select the template, falling back to
     ``"daily_briefing"`` when the key is empty or invalid. Also passes board
     context as template variables so custom prompts can reference them.
+
+    ``custom_instructions`` (from ``board.system_prompt``) is injected as a
+    template variable rather than replacing the entire template — this keeps the
+    output schema stable while allowing board-specific style/topic guidance.
     """
     prompt_key = (getattr(board, "prompt_key", None) or "daily_briefing").strip() or "daily_briefing"
     variables: dict = {"date": datetime.now().strftime("%Y-%m-%d")}
@@ -53,6 +57,8 @@ def _get_editor_prompt(board=None) -> str:
         variables["board_name"] = board.name
         variables["board_description"] = board.description
         variables["output_language"] = board.output_language
+    if custom_instructions:
+        variables["custom_instructions"] = custom_instructions
     try:
         return get_prompt(prompt_key, **variables)
     except FileNotFoundError:
@@ -98,6 +104,37 @@ def _build_fallback_summary(
         source_stats={},
         recommendation_report={"fallback": True},
     )
+
+
+def _daily_summary_schema() -> str:
+    """Return the unified daily summary JSON output schema snippet.
+
+    Loaded from ``partials/daily_summary_schema.md``; falls back to a minimal
+    hardcoded schema so the pipeline never breaks on a missing partial file.
+    """
+    try:
+        return "\n\n" + get_prompt("partials/daily_summary_schema")
+    except FileNotFoundError:
+        return (
+            "\n\nIMPORTANT: You MUST output a valid JSON object matching exactly this schema "
+            "(no markdown fences, no extra keys at the top level):\n"
+            "{\n"
+            '  "date": "YYYY-MM-DD",\n'
+            '  "overview": "A 2-3 sentence engaging summary.",\n'
+            '  "top_news": [\n'
+            "    {\n"
+            '      "headline": "...",\n'
+            '      "category": "...",\n'
+            '      "key_points": ["..."],\n'
+            '      "tags": ["#..."],\n'
+            '      "topic_path": "Cat/Sub/Topic",\n'
+            '      "original_link": "...",\n'
+            '      "source": "..."\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "Both `overview` and `top_news` are REQUIRED."
+        )
 
 
 class SummaryMixin:
@@ -152,30 +189,12 @@ class SummaryMixin:
             return None, {}
 
         board_id = board.id if board else None
-        _editor_prompt = _get_editor_prompt(board)
-        base_prompt = board.system_prompt if board and board.system_prompt else _editor_prompt
-        schema_suffix = (
-            "\n\nIMPORTANT: You MUST output a valid JSON object matching exactly this schema "
-            "(no markdown fences, no extra keys at the top level):\n"
-            "{\n"
-            '  "date": "YYYY-MM-DD",\n'
-            '  "overview": "A 2-3 sentence engaging summary of today\'s most important themes.",\n'
-            '  "top_news": [\n'
-            "    {\n"
-            '      "headline": "Clear, standalone headline",\n'
-            '      "category": "Broad category name",\n'
-            '      "key_points": ["Point 1", "Point 2"],\n'
-            '      "tags": ["#Tag1", "#Tag2"],\n'
-            '      "original_link": "URL from input",\n'
-            '      "source": "source value from input"\n'
-            "    }\n"
-            "  ]\n"
-            "}\n"
-            "Both `overview` and `top_news` are REQUIRED."
-        )
+        custom_instructions = board.system_prompt.strip() if board and board.system_prompt else None
+        _editor_prompt = _get_editor_prompt(board, custom_instructions=custom_instructions)
+        schema_suffix = _daily_summary_schema()
         from app.core.llm_config import language_directive
         lang_directive = language_directive(getattr(board, "output_language", None) if board else None)
-        system_prompt = base_prompt + schema_suffix + lang_directive
+        system_prompt = _editor_prompt + schema_suffix + lang_directive
 
         persona_context = ""
         personas = []
@@ -446,26 +465,7 @@ class SummaryMixin:
                         + _get_editor_prompt(board)
                     )
 
-                schema_suffix = (
-                    "\n\nIMPORTANT: You MUST output a valid JSON object matching exactly this schema "
-                    "(no markdown fences, no extra keys at the top level):\n"
-                    "{\n"
-                    '  "date": "YYYY-MM-DD",\n'
-                    '  "overview": "A 2-3 sentence engaging summary from this perspective.",\n'
-                    '  "top_news": [\n'
-                    "    {\n"
-                    '      "headline": "Clear, standalone headline",\n'
-                    '      "category": "Broad category name",\n'
-                    '      "key_points": ["Point 1", "Point 2"],\n'
-                    '      "tags": ["#Tag1", "#Tag2"],\n'
-                    '      "topic_path": "Category/Subcategory/Topic",\n'
-                    '      "original_link": "URL from input",\n'
-                    '      "source": "source value from input"\n'
-                    "    }\n"
-                    "  ]\n"
-                    "}\n"
-                    "Both `overview` and `top_news` are REQUIRED."
-                )
+                schema_suffix = _daily_summary_schema()
 
                 # Re-use the top_news from the first result as input articles
                 input_articles = [
@@ -553,34 +553,17 @@ class SummaryMixin:
         if one_time_preference:
             persona_context += f"\n- [Today Only] {one_time_preference}"
 
-        base_prompt = board.system_prompt or (
-            f"You are the editor of the '{board.name}' board. "
-            f"Generate {items_per_day} high-quality, self-contained items for today."
-        )
+        custom_instructions = board.system_prompt.strip() if board.system_prompt else None
+        base_prompt = _get_editor_prompt(board, custom_instructions=custom_instructions)
         if style_hint:
             base_prompt += f"\nStyle guidance: {style_hint}"
+        base_prompt += f"\nProduce exactly {items_per_day} items. All content must be original and factual."
 
-        output_schema = (
-            "Output a valid JSON object with this exact schema (no code fences):\n"
-            "{\n"
-            '  "overview": "A 1-2 sentence intro to today\'s items.",\n'
-            '  "top_news": [\n'
-            "    {\n"
-            '      "headline": "Concise headline for the item",\n'
-            '      "category": "Short category label",\n'
-            '      "key_points": ["Point 1 ...", "Point 2 ..."],\n'
-            '      "tags": ["#Tag1", "#Tag2"],\n'
-            '      "original_link": "",\n'
-            f'      "source": "{board.name}"\n'
-            "    }\n"
-            "  ]\n"
-            "}\n"
-            f"Produce exactly {items_per_day} items. All content must be original and factual."
-        )
+        output_schema = _daily_summary_schema()
 
         from app.core.llm_config import language_directive as _lang_dir
         lang_directive = _lang_dir(getattr(board, "output_language", None))
-        system_content = base_prompt + persona_context + "\n\n" + output_schema + lang_directive + ("\nYou must respond in JSON format." if "json" not in (base_prompt + persona_context + output_schema + lang_directive).lower() else "")
+        system_content = base_prompt + persona_context + output_schema + lang_directive + ("\nYou must respond in JSON format." if "json" not in (base_prompt + persona_context + output_schema + lang_directive).lower() else "")
         user_content = f"Today's Date: {datetime.now().strftime('%Y-%m-%d')}. Produce today's items now."
 
         try:
@@ -641,3 +624,43 @@ class SummaryMixin:
         except Exception as error:
             logger.exception("Error during pure-LLM generation: %s", error)
             return None
+
+
+def build_summary_prompt_preview(
+    board=None,
+    *,
+    one_time_preference: str | None = None,
+    persona_context: str = "",
+) -> dict:
+    """Build a preview of the resolved summary system prompt for UI inspection.
+
+    This is a read-only helper — it constructs the same prompt that
+    ``generate_daily_summary_from_items`` would use, without calling the LLM.
+
+    Returns a dict with keys ``system_prompt`` and ``user_prompt_template``,
+    suitable for the ``POST /boards/prompts/render`` API.
+    """
+    custom_instructions = board.system_prompt.strip() if board and board.system_prompt else None
+    editor_prompt = _get_editor_prompt(board, custom_instructions=custom_instructions)
+    schema_suffix = _daily_summary_schema()
+    from app.core.llm_config import language_directive
+    lang_directive = language_directive(getattr(board, "output_language", None) if board else None)
+
+    full_system = editor_prompt + schema_suffix + lang_directive
+    if persona_context:
+        full_system += "\n\n" + persona_context
+    if one_time_preference:
+        full_system += f"\n\n[Today Only] {one_time_preference}\n"
+
+    # Add JSON reminder if not already present
+    if "json" not in full_system.lower():
+        full_system += "\nYou must respond in JSON format."
+
+    return {
+        "system_prompt": full_system,
+        "user_prompt_template": (
+            f"Today's Date: {datetime.now().strftime('%Y-%m-%d')}\n\n"
+            "Here are the articles (respond in JSON):\n"
+            "[JSON array of articles]"
+        ),
+    }
