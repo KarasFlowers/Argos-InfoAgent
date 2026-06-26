@@ -131,6 +131,16 @@ class Settings(BaseSettings):
     RAG_BACKGROUND_INGEST_ENABLED: bool = True
     RAG_BACKGROUND_INGEST_WORKERS: int = 2
 
+    # Silent mode: run background collection when the PC is idle, then export
+    # generated summaries as Markdown files.
+    SILENT_MODE_ENABLED: bool = False
+    SILENT_MODE_OUTPUT_DIR: str = "./data/silent_reports"
+    SILENT_MODE_IDLE_SECONDS: int = 900
+    SILENT_MODE_INTERVAL_MINUTES: int = 30
+    SILENT_MODE_LOOKBACK_HOURS: int = 24
+    SILENT_MODE_BOARD_SLUGS: list[str] = []
+    SILENT_MODE_OVERWRITE_TODAY: bool = False
+
     # HyDE (Hypothetical Document Embedding) query rewriting
     RAG_HYDE_ENABLED: bool = True
 
@@ -177,6 +187,11 @@ class Settings(BaseSettings):
     @field_validator("CHROMA_DB_DIR", mode="before")
     @classmethod
     def resolve_chroma_dir(cls, value: str) -> str:
+        return _resolve_path(value)
+
+    @field_validator("SILENT_MODE_OUTPUT_DIR", mode="before")
+    @classmethod
+    def resolve_silent_mode_output_dir(cls, value: str) -> str:
         return _resolve_path(value)
 
     @field_validator("CORS_ORIGINS", mode="before")

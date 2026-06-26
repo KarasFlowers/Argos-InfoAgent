@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import urlsplit
 from datetime import datetime, UTC
 from typing import Optional
 
@@ -45,6 +46,15 @@ _DEFAULT_MARKETING_PATTERNS: list[re.Pattern[str]] = [
 
 _MIN_TITLE_LENGTH = 10  # characters
 _MIN_CONTENT_LENGTH = 80  # characters (RSS excerpt + full_text combined)
+_LOW_QUALITY_DOMAIN_PATTERNS = {
+    "tiktok.com",
+    "douyin.com",
+    "kuaishou.com",
+    "facebook.com",
+    "instagram.com",
+    "x.com",
+    "twitter.com",
+}
 
 class FilteringResult:
     """Result of applying rule-based filters to a list of ContentItems."""
@@ -173,4 +183,17 @@ def _check_low_signal(item: ContentItem) -> str | None:
 
     return None
 
+
+def _check_low_quality_domain(item: ContentItem) -> str | None:
+    """Check item against a small built-in low-quality domain list."""
+    try:
+        host = (urlsplit(item.url).hostname or "").lower()
+    except Exception:
+        return None
+    if not host:
+        return None
+    for domain in _LOW_QUALITY_DOMAIN_PATTERNS:
+        if host == domain or host.endswith(f".{domain}"):
+            return f"low_quality_domain:{domain}"
+    return None
 

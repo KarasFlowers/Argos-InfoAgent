@@ -39,11 +39,6 @@ def _require_rag_enabled():
             status_code=503,
             detail="RAG feature is disabled. Set RAG_ENABLED=true to enable.",
         )
-    if not is_rag_available():
-        raise HTTPException(
-            status_code=503,
-            detail="RAG dependencies not installed. Run: pip install -r requirements-rag.txt",
-        )
 
 
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
