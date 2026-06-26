@@ -272,6 +272,25 @@
                     </button>
                 </div>
                 <div class="sources-body">
+                    <div class="sources-silent-mode-card">
+                        <div class="sources-silent-mode-card__top">
+                            <div>
+                                <h4 class="metrics-card-title">静默模式</h4>
+                                <p class="sources-discover-hint" id="silent-mode-summary">正在读取静默模式状态...</p>
+                            </div>
+                            <span id="silent-mode-badge" class="sources-silent-mode-badge">--</span>
+                        </div>
+                        <div class="sources-silent-mode-meta" id="silent-mode-meta"></div>
+                        <div class="sources-silent-mode-actions">
+                            <button type="button" class="sources-test-btn" onclick="refreshSilentModeStatus()">刷新状态</button>
+                            <button type="button" class="sources-add-btn" onclick="runSilentModeNow()">立即运行</button>
+                        </div>
+                        <div id="silent-mode-result" class="sources-silent-mode-result" style="display:none;"></div>
+                        <div id="silent-mode-history" class="sources-silent-mode-history"></div>
+                    </div>
+
+                    <hr class="section-divider">
+
                     <div class="sources-dashboard-section">
                         <div class="sources-dashboard-grid" id="sources-dashboard-summary">
                             <p class="sources-placeholder">正在加载来源仪表盘...</p>

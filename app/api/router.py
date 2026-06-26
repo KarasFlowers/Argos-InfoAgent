@@ -21,6 +21,13 @@ from app.services.llm_service import llm_service
 from app.services.metrics_service import metrics_service
 from app.services.rss_service import fetch_all_feeds
 from app.services.email_service import email_service
+from app.services.silent_mode_service import (
+    get_idle_seconds,
+    get_latest_manifest_entry,
+    get_manifest_path,
+    read_manifest_entries,
+    run_silent_collection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +365,10 @@ class BoardSourceDiscoverRequest(BaseModel):
     limit: int = Field(default=6, ge=1, le=12)
 
 
+class SilentModeRunRequest(BaseModel):
+    force: bool = Field(default=False)
+
+
 async def _test_single_feed(url: str, timeout: float = 15.0) -> dict:
     """
     Test a single RSS feed URL. Returns a dict with:
@@ -516,6 +527,34 @@ async def test_all_feeds(
         {k: v for k, v in r.items() if k != "sample_titles"}
         for r in results
     ]
+
+
+@api_router.get("/silent-mode/status")
+async def get_silent_mode_status():
+    manifest_path = get_manifest_path()
+    recent_runs = list(reversed(read_manifest_entries(limit=5)))
+    return {
+        "enabled": settings.SILENT_MODE_ENABLED,
+        "output_dir": settings.SILENT_MODE_OUTPUT_DIR,
+        "manifest_path": str(manifest_path),
+        "manifest_exists": manifest_path.exists(),
+        "last_run": get_latest_manifest_entry(),
+        "recent_runs": recent_runs,
+        "idle_seconds": get_idle_seconds(),
+        "idle_threshold": settings.SILENT_MODE_IDLE_SECONDS,
+        "interval_minutes": settings.SILENT_MODE_INTERVAL_MINUTES,
+        "lookback_hours": settings.SILENT_MODE_LOOKBACK_HOURS,
+        "board_slugs": settings.SILENT_MODE_BOARD_SLUGS,
+        "overwrite_today": settings.SILENT_MODE_OVERWRITE_TODAY,
+    }
+
+
+@api_router.post("/silent-mode/run")
+async def run_silent_mode(
+    payload: SilentModeRunRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    return await run_silent_collection(session, force=payload.force)
 
 
 async def _resolve_board(session: AsyncSession, slug: str | None):
@@ -2066,6 +2105,13 @@ async def _discover_rss_candidates(plan: dict) -> list[str]:
     def _add(url: str) -> None:
         if url and url not in feeds:
             feeds.append(url)
+
+    # 0. Curated catalog: known-good feeds by topic, before any network search.
+    #    Zero network cost; URLs still get validated by _verify_and_fix_feeds.
+    from app.services.feed_catalog import catalog_candidate_urls
+
+    for url in catalog_candidate_urls(plan):
+        _add(url)
 
     # 1. Autodiscover advertised feeds from every candidate homepage, concurrently.
     discovered = await asyncio.gather(*[_discover_feeds(h) for h in homepages])

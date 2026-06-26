@@ -27,6 +27,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
+from app.core.db import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,14 @@ def _run_auto_extract_memories() -> None:
         logger.exception("Scheduled auto-extract memories failed")
 
 
+def _run_silent_mode() -> None:
+    """Synchronous wrapper — export Markdown digests when the PC is idle."""
+    try:
+        asyncio.run(_async_silent_mode())
+    except Exception:
+        logger.exception("Scheduled silent mode failed")
+
+
 async def _async_auto_extract_memories() -> None:
     from app.core.db import AsyncSessionLocal
     from app.services.memory_service import auto_extract_memories
@@ -224,6 +233,21 @@ async def _async_auto_extract_memories() -> None:
                 logger.info("Auto-extracted %d new memories from chat", count)
             tr.progress_total = 1
             tr.progress_current = 1
+
+
+async def _async_silent_mode() -> None:
+    from app.services.silent_mode_service import run_silent_collection
+
+    async with track_task_run("silent_mode_collect") as tr:
+        tr.progress_label = "collecting idle-time markdown digests"
+        async with AsyncSessionLocal() as session:
+            result = await run_silent_collection(session)
+            tr.progress_total = len(result.get("results") or [])
+            tr.progress_current = tr.progress_total
+            if result.get("ok"):
+                logger.info("Silent mode export complete: %s", result)
+            else:
+                logger.info("Silent mode skipped: %s", result.get("reason"))
 
 
 async def _async_push_boards(
@@ -426,6 +450,20 @@ async def start_scheduler() -> None:
 
     # 5. Per-board schedules (async — reads from DB)
     await _register_board_schedules()
+
+    # 6. Silent mode background exports, gated by PC idle time
+    if settings.SILENT_MODE_ENABLED:
+        _scheduler.add_job(
+            _run_silent_mode,
+            trigger=IntervalTrigger(minutes=settings.SILENT_MODE_INTERVAL_MINUTES),
+            id="silent_mode_collect",
+            name="Idle-time Markdown export",
+            replace_existing=True,
+        )
+        logger.info(
+            "Scheduled silent mode export every %s minutes",
+            settings.SILENT_MODE_INTERVAL_MINUTES,
+        )
 
     _scheduler.start()
     logger.info("APScheduler started")

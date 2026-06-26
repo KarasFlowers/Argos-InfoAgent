@@ -16,6 +16,7 @@ let currentCoverageAnalysis = null;
 let currentCoverageContext = null;
 let currentCoverageFocusClusterId = null;
 let currentCoverageRequestId = 0;
+let currentSilentModeStatus = null;
 let availablePromptTemplates = [];
 let overlayFocusStack = [];
 
@@ -4692,7 +4693,154 @@ function toggleSourcesPanel() {
     const modal = document.getElementById('sources-modal');
     if (!modal) return;
     if (toggleOverlay(modal, '#new-source-url')) {
+        refreshSilentModeStatus();
         loadSourcesForCurrentBoard();
+    }
+}
+
+function renderSilentModeHistory(recentRuns) {
+    const historyEl = document.getElementById('silent-mode-history');
+    if (!historyEl) return;
+
+    if (!Array.isArray(recentRuns) || recentRuns.length === 0) {
+        historyEl.innerHTML = '<div class="sources-silent-mode-history__title">最近运行</div><div class="sources-placeholder">暂无运行记录</div>';
+        return;
+    }
+
+    const items = recentRuns.map((run) => {
+        const ok = !!run.ok;
+        const status = ok ? '已完成' : (run.reason ? `跳过 · ${run.reason}` : '失败');
+        const exported = Array.isArray(run.results)
+            ? run.results.filter((item) => item.status === 'exported').length
+            : 0;
+        const articleCount = Array.isArray(run.results)
+            ? run.results.reduce((sum, item) => sum + (Number(item.article_count) || 0), 0)
+            : 0;
+        const generatedAt = run.generated_at ? formatDateTime(run.generated_at) : '--';
+        return `
+            <div class="sources-silent-mode-history__item ${ok ? 'is-ok' : (run.reason ? 'is-skip' : 'is-error')}">
+                <span><strong>${escapeHtml(generatedAt)}</strong> · ${escapeHtml(status)}</span>
+                <span>${escapeHtml(`${exported} 个板块 · ${articleCount} 篇`)}</span>
+            </div>
+        `;
+    }).join('');
+
+    historyEl.innerHTML = `
+        <div class="sources-silent-mode-history__title">最近运行</div>
+        <div class="sources-silent-mode-history__list">${items}</div>
+    `;
+}
+
+async function refreshSilentModeStatus() {
+    const summaryEl = document.getElementById('silent-mode-summary');
+    const badgeEl = document.getElementById('silent-mode-badge');
+    const metaEl = document.getElementById('silent-mode-meta');
+    const resultEl = document.getElementById('silent-mode-result');
+    const historyEl = document.getElementById('silent-mode-history');
+    if (!summaryEl || !badgeEl || !metaEl) return;
+
+    summaryEl.textContent = '正在读取静默模式状态...';
+    badgeEl.textContent = '--';
+    badgeEl.className = 'sources-silent-mode-badge';
+    metaEl.innerHTML = '';
+    if (resultEl) {
+        resultEl.style.display = 'none';
+        resultEl.textContent = '';
+        resultEl.className = 'sources-silent-mode-result';
+    }
+    if (historyEl) {
+        historyEl.innerHTML = '<div class="sources-silent-mode-history__title">最近运行</div><div class="sources-placeholder">正在读取...</div>';
+    }
+
+    try {
+        const res = await fetch('/api/v1/silent-mode/status');
+        if (!res.ok) throw new Error(await readResponseError(res, '读取静默模式状态失败'));
+        const data = await res.json();
+        currentSilentModeStatus = data;
+
+        const enabled = !!data.enabled;
+        badgeEl.textContent = enabled ? '已启用' : '已关闭';
+        badgeEl.className = `sources-silent-mode-badge ${enabled ? 'is-on' : 'is-off'}`;
+        summaryEl.textContent = enabled
+            ? '电脑空闲时自动采集并导出 Markdown。'
+            : '静默模式当前关闭。';
+        const metaItems = [
+            `输出目录：${data.output_dir || '--'}`,
+            `运行账本：${data.manifest_path || '--'}`,
+            `空闲阈值：${data.idle_threshold ?? '--'} 秒`,
+            `轮询间隔：${data.interval_minutes ?? '--'} 分钟`,
+            `覆盖今日：${data.overwrite_today ? '是' : '否'}`,
+        ];
+        if (Array.isArray(data.board_slugs) && data.board_slugs.length > 0) {
+            metaItems.push(`板块：${data.board_slugs.join('、')}`);
+        } else {
+            metaItems.push('板块：全部启用板块');
+        }
+        const lastRun = data.last_run || null;
+        if (lastRun) {
+            const exported = Array.isArray(lastRun.results)
+                ? lastRun.results.filter((item) => item.status === 'exported').length
+                : 0;
+            const generatedAt = lastRun.generated_at ? formatDateTime(lastRun.generated_at) : '--';
+            const statusText = lastRun.ok ? `成功，导出 ${exported} 个板块` : `跳过：${lastRun.reason || 'unknown'}`;
+            metaItems.push(`最近运行：${generatedAt}`);
+            metaItems.push(`最近结果：${statusText}`);
+        } else {
+            metaItems.push('最近运行：暂无记录');
+        }
+        metaEl.innerHTML = metaItems.map((item) => `<span>${escapeHtml(item)}</span>`).join('');
+        renderSilentModeHistory(data.recent_runs || []);
+    } catch (error) {
+        currentSilentModeStatus = null;
+        summaryEl.textContent = '静默模式状态读取失败。';
+        badgeEl.textContent = '异常';
+        badgeEl.className = 'sources-silent-mode-badge is-off';
+        metaEl.innerHTML = `<span>${escapeHtml(error.message)}</span>`;
+        if (historyEl) {
+            historyEl.innerHTML = '<div class="sources-silent-mode-history__title">最近运行</div><div class="sources-placeholder">读取失败</div>';
+        }
+    }
+}
+
+async function runSilentModeNow() {
+    const resultEl = document.getElementById('silent-mode-result');
+    if (!resultEl) return;
+    resultEl.style.display = 'block';
+    resultEl.className = 'sources-silent-mode-result';
+    resultEl.textContent = '正在执行静默采集...';
+
+    try {
+        const res = await fetch('/api/v1/silent-mode/run', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ force: true }),
+        });
+        if (!res.ok) throw new Error(await readResponseError(res, '静默模式运行失败'));
+        const data = await res.json();
+        const lines = [];
+        if (data.reason) {
+            lines.push(`状态：${data.reason}`);
+        }
+        if (Array.isArray(data.results) && data.results.length > 0) {
+            lines.push(`已处理 ${data.results.length} 个板块。`);
+            data.results.slice(0, 3).forEach((item) => {
+                const bits = [item.board || '未知板块', item.status || 'unknown'];
+                if (Number.isFinite(item.article_count)) bits.push(`${item.article_count} 篇`);
+                if (item.exported_path) bits.push(item.exported_path);
+                if (item.reason) bits.push(item.reason);
+                lines.push(`- ${bits.join(' · ')}`);
+            });
+            if (data.manifest_path) {
+                lines.push(`账本：${data.manifest_path}`);
+            }
+        } else {
+            lines.push('没有可导出的内容。');
+        }
+        resultEl.textContent = lines.join('\n');
+        refreshSilentModeStatus();
+    } catch (error) {
+        resultEl.className = 'sources-silent-mode-result is-error';
+        resultEl.textContent = `运行失败：${error.message}`;
     }
 }
 
