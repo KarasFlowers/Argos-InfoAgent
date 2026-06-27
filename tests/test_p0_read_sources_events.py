@@ -1,35 +1,44 @@
+from datetime import datetime, timedelta
+
 import pytest
 import pytest_asyncio
-from datetime import datetime, timedelta
+from fastapi import HTTPException
 from sqlalchemy import Integer
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, select
 
+from app.api.router import (
+    _normalize_article_url_or_400,
+    _normalize_source_url_or_400,
+    _serialize_board,
+    _validate_board_source_payload,
+    get_catchup_status,
+    get_rss_feed,
+)
 from app.core.db import (
     _backfill_article_read_state,
     _ensure_legacy_columns,
     _migrate_phase2_schema,
     _sync_sources_from_board_configs,
 )
-from fastapi import HTTPException
-
-from app.api.router import (
-    _board_catchup_days,
-    _build_briefing_events,
-    _normalize_article_url_or_400,
-    _normalize_source_url_or_400,
-    _serialize_board,
-    _validate_board_source_payload,
-    get_rss_feed,
-    get_catchup_status,
+from app.models.domain import (
+    ArticleReadState,
+    Board,
+    ContentCluster,
+    DailySummary,
+    NewsItem,
+    Source,
+    SummaryViewLog,
+    UserFeedback,
 )
-from app.models.domain import ArticleReadState, Board, ContentCluster, DailySummary, NewsItem, Source, SummaryViewLog, UserFeedback
 from app.models.schemas import ContentItem, SummaryItem
+from app.services.briefing_service import build_briefing_events
+from app.services.catchup_service import board_catchup_days
 from app.services.clustering_service import assign_clusters
+from app.services.repositories import DBService
 from app.services.saved_service import _normalize_url as _normalize_saved_url
 from app.services.source_adapters.multi_adapter import MultiSourceAdapter
-from app.services.repositories import DBService
 
 
 @pytest_asyncio.fixture
@@ -205,7 +214,7 @@ async def test_board_catchup_days_zero_disables_status_window(isolated_session):
     board.catchup_days = 0
     await isolated_session.commit()
 
-    assert _board_catchup_days(board) == 0
+    assert board_catchup_days(board) == 0
     assert _serialize_board(board)["catchup_days"] == 0
 
     status = await get_catchup_status(
@@ -331,12 +340,14 @@ async def test_gap_dates_are_scoped_by_board(isolated_session):
     board_b = await _make_board(isolated_session, "gap-beta")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    isolated_session.add(DailySummary(
-        date=yesterday,
-        board_id=board_a.id,
-        perspective="overview",
-        overview="Board A already has this date.",
-    ))
+    isolated_session.add(
+        DailySummary(
+            date=yesterday,
+            board_id=board_a.id,
+            perspective="overview",
+            overview="Board A already has this date.",
+        )
+    )
     await isolated_session.commit()
 
     gaps_a = await db.get_gap_dates(isolated_session, days=1, board_id=board_a.id)
@@ -398,15 +409,21 @@ async def test_cleanup_old_data_preserves_state_for_urls_still_referenced(isolat
 
     removed = await db.cleanup_old_data(isolated_session, days_to_keep=7)
 
-    read_state = (await isolated_session.execute(
-        select(ArticleReadState).where(ArticleReadState.article_url == shared_url)
-    )).scalars().first()
-    feedback = (await isolated_session.execute(
-        select(UserFeedback).where(UserFeedback.article_url == shared_url)
-    )).scalars().first()
-    remaining_summaries = (await isolated_session.execute(
-        select(DailySummary).where(DailySummary.date.in_([old_date, new_date]))
-    )).scalars().all()
+    read_state = (
+        (await isolated_session.execute(select(ArticleReadState).where(ArticleReadState.article_url == shared_url)))
+        .scalars()
+        .first()
+    )
+    feedback = (
+        (await isolated_session.execute(select(UserFeedback).where(UserFeedback.article_url == shared_url)))
+        .scalars()
+        .first()
+    )
+    remaining_summaries = (
+        (await isolated_session.execute(select(DailySummary).where(DailySummary.date.in_([old_date, new_date]))))
+        .scalars()
+        .all()
+    )
 
     assert removed == 1
     assert deleted_rag_urls == []
@@ -579,25 +596,29 @@ async def test_multi_adapter_uses_source_table_rss_without_legacy_rss_config(iso
     )
     isolated_session.add(board)
     await isolated_session.flush()
-    isolated_session.add(Source(
-        url="https://source-table.example/feed.xml",
-        source_type="rss",
-        enabled=True,
-        board_id=board.id,
-    ))
+    isolated_session.add(
+        Source(
+            url="https://source-table.example/feed.xml",
+            source_type="rss",
+            enabled=True,
+            board_id=board.id,
+        )
+    )
     await isolated_session.commit()
 
     seen: dict[str, object] = {}
 
     async def fake_fetch_rss(cfg):
         seen["feeds"] = cfg.get("feeds")
-        return [ContentItem(
-            id="rss:test:1",
-            source_type="rss",
-            title="Source table item",
-            url="https://source-table.example/item",
-            source_name="Source Table",
-        )]
+        return [
+            ContentItem(
+                id="rss:test:1",
+                source_type="rss",
+                title="Source table item",
+                url="https://source-table.example/item",
+                source_name="Source Table",
+            )
+        ]
 
     async def fake_generate_daily_summary_from_items(items, **kwargs):
         seen["items"] = items
@@ -642,9 +663,11 @@ async def test_cluster_assignment_is_scoped_by_board(isolated_session):
     await assign_clusters([item_b], board_b.id, isolated_session, commit=False)
     await isolated_session.commit()
 
-    clusters = (await isolated_session.execute(
-        select(ContentCluster).where(ContentCluster.title == "Shared event headline")
-    )).scalars().all()
+    clusters = (
+        (await isolated_session.execute(select(ContentCluster).where(ContentCluster.title == "Shared event headline")))
+        .scalars()
+        .all()
+    )
 
     assert item_a.cluster_id is not None
     assert item_b.cluster_id is not None
@@ -697,7 +720,7 @@ async def test_briefing_events_include_recent_cluster_items(isolated_session):
         cluster_id=cluster.id,
     )
 
-    events = await _build_briefing_events(isolated_session, board.id, [root], "2026-06-08")
+    events = await build_briefing_events(isolated_session, board.id, [root], "2026-06-08")
 
     assert len(events) == 1
     assert events[0]["cluster_id"] == cluster.id
@@ -747,7 +770,7 @@ async def test_briefing_events_do_not_count_untrackable_items_as_unread(isolated
         cluster_id=cluster.id,
     )
 
-    events = await _build_briefing_events(isolated_session, board.id, [root], "2026-06-08")
+    events = await build_briefing_events(isolated_session, board.id, [root], "2026-06-08")
 
     assert events[0]["unread_item_count"] == 0
     assert events[0]["items"][0]["is_read"] is True

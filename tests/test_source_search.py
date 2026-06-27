@@ -22,10 +22,14 @@ def _fake_async_client(json_payload):
 class TestSearchSubreddits:
     @pytest.mark.anyio
     async def test_parses_and_sorts_by_subscribers(self):
-        payload = {"data": {"children": [
-            {"data": {"display_name": "small", "title": "S", "subscribers": 100}},
-            {"data": {"display_name": "big", "title": "B", "subscribers": 9000}},
-        ]}}
+        payload = {
+            "data": {
+                "children": [
+                    {"data": {"display_name": "small", "title": "S", "subscribers": 100}},
+                    {"data": {"display_name": "big", "title": "B", "subscribers": 9000}},
+                ]
+            }
+        }
         with patch("httpx.AsyncClient", return_value=_fake_async_client(payload)):
             out = await source_search.search_subreddits("machine learning")
         assert [s["name"] for s in out] == ["big", "small"]  # sorted desc
@@ -61,20 +65,26 @@ class TestSearchSubreddits:
 class TestSearchGithubRepos:
     @pytest.mark.anyio
     async def test_parses_owner_repo_and_stars(self):
-        payload = {"items": [
-            {"full_name": "openai/whisper", "stargazers_count": 50000, "description": "ASR"},
-            {"full_name": "bad-entry-no-slash", "stargazers_count": 1},
-        ]}
-        with patch("app.core.config.settings", MagicMock(GITHUB_TOKEN=None)), \
-             patch("httpx.AsyncClient", return_value=_fake_async_client(payload)):
+        payload = {
+            "items": [
+                {"full_name": "openai/whisper", "stargazers_count": 50000, "description": "ASR"},
+                {"full_name": "bad-entry-no-slash", "stargazers_count": 1},
+            ]
+        }
+        with (
+            patch("app.core.config.settings", MagicMock(GITHUB_TOKEN=None)),
+            patch("httpx.AsyncClient", return_value=_fake_async_client(payload)),
+        ):
             out = await source_search.search_github_repos("whisper")
         assert out == [{"owner": "openai", "repo": "whisper", "stars": 50000, "description": "ASR"}]
 
     @pytest.mark.anyio
     async def test_adds_auth_header_when_token_present(self):
         client = _fake_async_client({"items": []})
-        with patch("app.core.config.settings", MagicMock(GITHUB_TOKEN="ghp_x")), \
-             patch("httpx.AsyncClient", return_value=client) as ctor:
+        with (
+            patch("app.core.config.settings", MagicMock(GITHUB_TOKEN="ghp_x")),
+            patch("httpx.AsyncClient", return_value=client) as ctor,
+        ):
             await source_search.search_github_repos("x")
         # token must be wired into the client headers
         headers = ctor.call_args.kwargs["headers"]
@@ -88,7 +98,9 @@ class TestSearchGithubRepos:
     async def test_http_failure_returns_empty(self):
         client = _fake_async_client({})
         client.get = AsyncMock(side_effect=Exception("boom"))
-        with patch("app.core.config.settings", MagicMock(GITHUB_TOKEN=None)), \
-             patch("httpx.AsyncClient", return_value=client):
+        with (
+            patch("app.core.config.settings", MagicMock(GITHUB_TOKEN=None)),
+            patch("httpx.AsyncClient", return_value=client),
+        ):
             out = await source_search.search_github_repos("x")
         assert out == []

@@ -4,6 +4,7 @@ RSS-based source adapter.
 Reads ``board.source_config["feeds"]`` (list of RSS URLs), fetches them,
 scores the articles, and hands off to the LLM editor for summarization.
 """
+
 import logging
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,7 @@ class RSSAdapter(SourceAdapter):
         feeds: list[str] = []
         try:
             from app.services.db_service import db_service
+
             feeds = await db_service.get_board_rss_feeds(session, board)
         except Exception as exc:
             logger.debug("RSSAdapter Source lookup skipped for board '%s': %s", board.slug, exc)

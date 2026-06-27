@@ -2,6 +2,7 @@
 Deduplication service: URL-based cross-source merge + AI semantic dedup.
 Ported from Horizon's orchestrator logic.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,14 +43,13 @@ def _topic_dedup_system() -> str:
         return _DEDUP_FALLBACK_SYSTEM
 
 
-TOPIC_DEDUP_USER = (
-    "Here are the items:\n\n{items}"
-)
+TOPIC_DEDUP_USER = "Here are the items:\n\n{items}"
 
 
 # ---------------------------------------------------------------------------
 # URL normalisation & cross-source merge
 # ---------------------------------------------------------------------------
+
 
 def normalize_url(url: str) -> str:
     """Normalise a URL for cross-source dedup grouping.
@@ -123,11 +123,7 @@ def _merge_group(group: list[ContentItem]) -> ContentItem:
 
         if item is not primary and item.content:
             if primary.content and item.content not in primary.content:
-                primary.content = (
-                    (primary.content or "")
-                    + f"\n\n--- From {item.source_type} ---\n"
-                    + item.content
-                )
+                primary.content = (primary.content or "") + f"\n\n--- From {item.source_type} ---\n" + item.content
 
     primary.metadata["merged_sources"] = list(all_sources)
     return primary
@@ -137,12 +133,13 @@ def _merge_group(group: list[ContentItem]) -> ContentItem:
 # AI semantic dedup
 # ---------------------------------------------------------------------------
 
+
 def _parse_json_response(text: str) -> dict | None:
     """Best-effort extraction of a JSON object from an LLM response."""
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         text = "\n".join(lines).strip()
     try:
         return json.loads(text)
@@ -216,14 +213,13 @@ async def merge_topic_duplicates(
             if dup.content:
                 if not primary.content or dup.content not in primary.content:
                     label = dup.source_type
-                    primary.content = (
-                        (primary.content or "")
-                        + f"\n\n--- From {label} ---\n{dup.content}"
-                    )
+                    primary.content = (primary.content or "") + f"\n\n--- From {label} ---\n{dup.content}"
             logger.info(
                 "dedup: keep [%d] %s  |  drop [%d] %s",
-                primary_idx, primary.title[:50],
-                dup_idx, dup.title[:50],
+                primary_idx,
+                primary.title[:50],
+                dup_idx,
+                dup.title[:50],
             )
             drop_indices.add(dup_idx)
 

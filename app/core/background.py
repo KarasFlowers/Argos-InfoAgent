@@ -5,6 +5,7 @@ Usage:
     from app.core.background import register_background_task
     register_background_task(asyncio.create_task(some_coro()))
 """
+
 from __future__ import annotations
 
 import asyncio

@@ -3,7 +3,7 @@ test_llm_client.py - Unit tests for the LLMClient abstraction layer.
 
 Tests:
   - Config fallback: LLM_API_KEY falls back to DEEPSEEK_API_KEY
-  - Config fallback: LLM_BASE_URL falls back to DEEPSEEK_BASE_URL
+  - Config fallback: LLM_BASE_URL falls back to DEEPSEEK_BASE_URL only for legacy DeepSeek config
   - Model name is correctly propagated from settings
   - LLMClient.chat() injects model automatically
 """
@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Settings fallback logic
 # ---------------------------------------------------------------------------
+
 
 class TestSettingsFallback:
     """Verify ``effective_llm_*`` properties fall back to legacy values."""
@@ -60,6 +60,17 @@ class TestSettingsFallback:
         )
         assert s.effective_llm_base_url == "https://api.deepseek.com/v1"
 
+    def test_generic_llm_key_does_not_fall_back_to_deepseek_base_url(self):
+        from app.core.config import Settings
+
+        s = Settings(
+            LLM_API_KEY="new-key",
+            LLM_BASE_URL=None,
+            DEEPSEEK_BASE_URL="https://api.deepseek.com/v1",
+            _env_file=None,
+        )
+        assert s.effective_llm_base_url is None
+
     def test_default_model_name(self):
         from app.core.config import Settings
 
@@ -70,6 +81,7 @@ class TestSettingsFallback:
 # ---------------------------------------------------------------------------
 # LLMClient initialisation
 # ---------------------------------------------------------------------------
+
 
 class TestLLMClientInit:
     """Verify ``LLMClient`` wires settings into the underlying OpenAI client."""
@@ -107,6 +119,7 @@ class TestLLMClientInit:
 # LLMClient.chat() auto-injects model
 # ---------------------------------------------------------------------------
 
+
 class TestLLMClientChat:
     """Verify ``chat()`` delegates correctly to the underlying OpenAI client."""
 
@@ -143,6 +156,7 @@ class TestLLMClientChat:
 # ---------------------------------------------------------------------------
 # Adaptive parameter fallback (temperature rejection, max_tokens variants)
 # ---------------------------------------------------------------------------
+
 
 def _fake_settings(model="test-model", base_url="https://example.com/v1"):
     s = MagicMock()
@@ -227,9 +241,7 @@ class TestAdaptiveParameterFallback:
         ok.usage = None
         client._client.chat.completions.create = AsyncMock(
             side_effect=[
-                Exception(
-                    "Use 'max_completion_tokens' instead of 'max_tokens'"
-                ),
+                Exception("Use 'max_completion_tokens' instead of 'max_tokens'"),
                 ok,
             ]
         )
@@ -251,9 +263,7 @@ class TestAdaptiveParameterFallback:
         from app.services.llm.client import LLMClient
 
         client = LLMClient(_fake_settings())
-        client._client.chat.completions.create = AsyncMock(
-            side_effect=Exception("503 service unavailable")
-        )
+        client._client.chat.completions.create = AsyncMock(side_effect=Exception("503 service unavailable"))
 
         with patch("app.services.metrics_service.metrics_service") as m:
             m.record_tokens = AsyncMock()

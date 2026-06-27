@@ -5,9 +5,9 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
 from collections import deque
-from datetime import datetime, UTC
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -251,7 +251,7 @@ async def run_silent_collection(
     board_slugs: list[str] | None = None,
 ) -> dict[str, Any]:
     from app.services.db_service import db_service
-    from app.services.source_adapters import get_adapter, UnknownSourceTypeError
+    from app.services.source_adapters import UnknownSourceTypeError, get_adapter
 
     if not settings.SILENT_MODE_ENABLED and not force:
         result = {

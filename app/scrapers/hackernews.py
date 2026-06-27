@@ -3,12 +3,12 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
-from app.scrapers.base import BaseScraper
 from app.models.schemas import ContentItem
+from app.scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class HackerNewsScraper(BaseScraper):
                     continue
                 if story.get("score", 0) < min_score:
                     continue
-                published_at = datetime.fromtimestamp(story["time"], tz=timezone.utc)
+                published_at = datetime.fromtimestamp(story["time"], tz=UTC)
                 if published_at < since:
                     continue
                 valid_stories.append(story)
@@ -56,7 +56,7 @@ class HackerNewsScraper(BaseScraper):
             all_comments = await asyncio.gather(*comment_tasks, return_exceptions=True)
 
             items: list[ContentItem] = []
-            for story, comments in zip(valid_stories, all_comments):
+            for story, comments in zip(valid_stories, all_comments, strict=False):
                 if isinstance(comments, Exception):
                     comments = []
                 item = self._parse_story(story, comments)
@@ -92,7 +92,7 @@ class HackerNewsScraper(BaseScraper):
         title = story.get("title", "")
         url = story.get("url", f"https://news.ycombinator.com/item?id={story_id}")
         author = story.get("by", "unknown")
-        published_at = datetime.fromtimestamp(story["time"], tz=timezone.utc)
+        published_at = datetime.fromtimestamp(story["time"], tz=UTC)
 
         parts: list[str] = []
         if story.get("text"):

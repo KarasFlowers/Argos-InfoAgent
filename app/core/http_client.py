@@ -5,6 +5,7 @@ All adapters and scrapers should use ``get_http_client()`` instead of
 creating a new ``httpx.AsyncClient`` per request, so that connection
 pooling is effective across the application.
 """
+
 import logging
 
 import httpx

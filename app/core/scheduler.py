@@ -19,12 +19,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, UTC
-from typing import List, Optional
+from datetime import UTC, datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal
@@ -32,11 +33,85 @@ from app.core.db import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 
 _scheduler: BackgroundScheduler | None = None
+TASK_RUN_ERROR_MAX_LENGTH = 500
+TASK_RUN_STALE_AFTER = timedelta(hours=2)
+TASK_STATUS_RUNNING = "running"
+TASK_STATUS_DONE = "done"
+TASK_STATUS_FAILED = "failed"
 
 
 # ---------------------------------------------------------------------------
 # TaskRun tracking
 # ---------------------------------------------------------------------------
+
+
+def _truncate_error(error: BaseException | str) -> str:
+    return str(error)[:TASK_RUN_ERROR_MAX_LENGTH]
+
+
+async def _load_task_run(session: AsyncSession, task_id: int):
+    from app.models.domain import TaskRun
+
+    result = await session.execute(select(TaskRun).where(TaskRun.id == task_id))
+    return result.scalar_one_or_none()
+
+
+async def _persist_task_progress(session: AsyncSession, task_id: int, ref) -> None:
+    task_run = await _load_task_run(session, task_id)
+    if not task_run:
+        return
+    task_run.progress_label = ref.progress_label
+    task_run.progress_current = ref.progress_current
+    task_run.progress_total = ref.progress_total
+    task_run.stage_timings = ref.stage_timings or None
+    task_run.ai_call_breakdown = ref.ai_call_breakdown or None
+    await session.commit()
+
+
+async def _finish_task_run(
+    session: AsyncSession,
+    task_id: int,
+    status: str,
+    ref=None,
+    error_summary: str = "",
+) -> None:
+    task_run = await _load_task_run(session, task_id)
+    if not task_run:
+        return
+    task_run.status = status
+    if ref is not None:
+        task_run.progress_label = ref.progress_label
+        task_run.progress_current = ref.progress_current
+        task_run.progress_total = ref.progress_total
+        task_run.stage_timings = ref.stage_timings or None
+        task_run.ai_call_breakdown = ref.ai_call_breakdown or None
+    task_run.error_summary = error_summary[:TASK_RUN_ERROR_MAX_LENGTH] if error_summary else ""
+    task_run.finished_at = datetime.now(UTC)
+    await session.commit()
+
+
+async def mark_stale_task_runs(
+    session: AsyncSession,
+    cutoff: datetime | None = None,
+) -> int:
+    """Mark long-running TaskRun rows as failed and return the number updated."""
+    from app.models.domain import TaskRun
+
+    stale_cutoff = cutoff or (datetime.now(UTC) - TASK_RUN_STALE_AFTER)
+    stale_stmt = select(TaskRun).where(
+        TaskRun.status == TASK_STATUS_RUNNING,
+        TaskRun.started_at < stale_cutoff,
+    )
+    stale_result = await session.execute(stale_stmt)
+    stale_tasks = stale_result.scalars().all()
+    for stale in stale_tasks:
+        stale.status = TASK_STATUS_FAILED
+        stale.error_summary = "Timed out (stale)"
+        stale.finished_at = datetime.now(UTC)
+    if stale_tasks:
+        await session.commit()
+    return len(stale_tasks)
+
 
 @asynccontextmanager
 async def track_task_run(kind: str, trigger_type: str = "scheduled", board_id: int | None = None):
@@ -48,11 +123,15 @@ async def track_task_run(kind: str, trigger_type: str = "scheduled", board_id: i
             tr.progress_label = "deleting old summaries"
             await do_cleanup()
     """
-    from app.core.db import AsyncSessionLocal
     from app.models.domain import TaskRun
 
-    task = TaskRun(kind=kind, trigger_type=trigger_type, status="running",
-                   started_at=datetime.now(UTC), board_id=board_id)
+    task = TaskRun(
+        kind=kind,
+        trigger_type=trigger_type,
+        status=TASK_STATUS_RUNNING,
+        started_at=datetime.now(UTC),
+        board_id=board_id,
+    )
 
     async with AsyncSessionLocal() as session:
         session.add(task)
@@ -69,44 +148,45 @@ async def track_task_run(kind: str, trigger_type: str = "scheduled", board_id: i
             self.stage_timings = {}
             self.ai_call_breakdown = {}
 
+        async def save_progress(self) -> None:
+            async with AsyncSessionLocal() as session:
+                await _persist_task_progress(session, task_id, self)
+
     ref = _TaskRef()
 
     try:
         yield ref
+    except asyncio.CancelledError:
+        async with AsyncSessionLocal() as session:
+            await _finish_task_run(
+                session,
+                task_id,
+                TASK_STATUS_FAILED,
+                ref=ref,
+                error_summary="Cancelled during shutdown",
+            )
+        raise
     except Exception as exc:
         async with AsyncSessionLocal() as session:
-            from sqlalchemy import select as _sel
-            stmt = _sel(TaskRun).where(TaskRun.id == task_id)
-            result = await session.execute(stmt)
-            tr = result.scalar_one_or_none()
-            if tr:
-                tr.status = "failed"
-                tr.error_summary = str(exc)[:500]
-                tr.finished_at = datetime.now(UTC)
-                await session.commit()
+            await _finish_task_run(
+                session,
+                task_id,
+                TASK_STATUS_FAILED,
+                ref=ref,
+                error_summary=_truncate_error(exc),
+            )
         raise
     else:
         async with AsyncSessionLocal() as session:
-            from sqlalchemy import select as _sel
-            stmt = _sel(TaskRun).where(TaskRun.id == task_id)
-            result = await session.execute(stmt)
-            tr = result.scalar_one_or_none()
-            if tr:
-                tr.status = "done"
-                tr.progress_label = ref.progress_label
-                tr.progress_current = ref.progress_current
-                tr.progress_total = ref.progress_total
-                tr.stage_timings = ref.stage_timings or None
-                tr.ai_call_breakdown = ref.ai_call_breakdown or None
-                tr.finished_at = datetime.now(UTC)
-                await session.commit()
+            await _finish_task_run(session, task_id, TASK_STATUS_DONE, ref=ref)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _parse_hhmm(time_str: str) -> Optional[tuple[int, int]]:
+
+def _parse_hhmm(time_str: str) -> tuple[int, int] | None:
     """Parse 'HH:MM' into (hour, minute) or return None on bad format."""
     try:
         parts = time_str.strip().split(":")
@@ -122,6 +202,7 @@ def _parse_hhmm(time_str: str) -> Optional[tuple[int, int]]:
 # Async work functions
 # ---------------------------------------------------------------------------
 
+
 def _run_cleanup() -> None:
     """Synchronous wrapper executed by APScheduler's thread-pool."""
     try:
@@ -131,47 +212,32 @@ def _run_cleanup() -> None:
 
 
 async def _async_cleanup() -> None:
-    from app.core.db import AsyncSessionLocal
     from app.services.db_service import db_service
-    from app.models.domain import TaskRun
-    from sqlalchemy import select as _sel
-    from datetime import timedelta
 
     async with track_task_run("cleanup") as tr:
         tr.progress_label = "deleting old summaries"
         async with AsyncSessionLocal() as session:
-            deleted = await db_service.cleanup_old_data(
-                session, days_to_keep=settings.HISTORY_DAYS_TO_KEEP
-            )
+            deleted = await db_service.cleanup_old_data(session, days_to_keep=settings.HISTORY_DAYS_TO_KEEP)
             logger.info("Scheduled cleanup removed %s old summaries", deleted)
 
-            # Mark stale TaskRun entries that have been "running" for over 2 hours
-            stale_cutoff = datetime.now(UTC) - timedelta(hours=2)
-            stale_stmt = _sel(TaskRun).where(
-                TaskRun.status == "running",
-                TaskRun.started_at < stale_cutoff,
-            )
-            stale_result = await session.execute(stale_stmt)
-            stale_tasks = stale_result.scalars().all()
-            for stale in stale_tasks:
-                stale.status = "failed"
-                stale.error_summary = "Timed out (stale)"
-                stale.finished_at = datetime.now(UTC)
-            if stale_tasks:
-                await session.commit()
-                logger.info("Marked %d stale TaskRun(s) as failed", len(stale_tasks))
+            stale_count = await mark_stale_task_runs(session)
+            if stale_count:
+                logger.info("Marked %d stale TaskRun(s) as failed", stale_count)
 
             tr.progress_total = 1
             tr.progress_current = 1
+            await tr.save_progress()
 
 
 def _make_board_push_runner(board_slug: str):
     """Factory: create a sync runner scoped to a single board slug."""
+
     def _run() -> None:
         try:
             asyncio.run(_async_push_boards(slugs=[board_slug]))
         except Exception:
             logger.exception("Scheduled push failed for board '%s'", board_slug)
+
     return _run
 
 
@@ -251,7 +317,7 @@ async def _async_silent_mode() -> None:
 
 
 async def _async_push_boards(
-    slugs: Optional[List[str]] = None,
+    slugs: list[str] | None = None,
     only_global: bool = False,
 ) -> None:
     """
@@ -265,7 +331,7 @@ async def _async_push_boards(
     from app.core.db import AsyncSessionLocal
     from app.services.db_service import db_service
     from app.services.notification import notify_service
-    from app.services.source_adapters import get_adapter, UnknownSourceTypeError
+    from app.services.source_adapters import UnknownSourceTypeError, get_adapter
 
     trigger = "manual" if slugs else "scheduled"
     async with track_task_run("daily_push", trigger_type=trigger) as tr:
@@ -290,10 +356,9 @@ async def _async_push_boards(
             for i, board in enumerate(boards):
                 tr.progress_current = i + 1
                 tr.progress_label = f"processing board '{board.slug}' ({i+1}/{len(boards)})"
+                await tr.save_progress()
                 logger.info("Push: processing board '%s'", board.slug)
-                existing = await db_service.get_summary_by_date(
-                    session, search_date, board_id=board.id
-                )
+                existing = await db_service.get_summary_by_date(session, search_date, board_id=board.id)
                 summary = existing
                 if not summary:
                     try:
@@ -312,14 +377,13 @@ async def _async_push_boards(
                         try:
                             await db_service.save_summary(session, summary, board_id=board.id)
                         except Exception:
-                            logger.exception(
-                                "Failed to save background summary for board '%s'", board.slug
-                            )
+                            logger.exception("Failed to save background summary for board '%s'", board.slug)
                             continue
 
                         # Enqueue URLs for background ingestion (RSS items only).
                         if settings.RAG_ENABLED and settings.RAG_BACKGROUND_INGEST_ENABLED:
                             from app.services.rag_service import enqueue_for_ingest
+
                             article_urls = [
                                 item.original_link
                                 for item in summary.top_news
@@ -333,9 +397,7 @@ async def _async_push_boards(
                     # Determine per-board notification channels (or use global default)
                     board_channels = None
                     if board.notify_channels:
-                        board_channels = [
-                            ch.strip() for ch in board.notify_channels.split(",") if ch.strip()
-                        ]
+                        board_channels = [ch.strip() for ch in board.notify_channels.split(",") if ch.strip()]
                     try:
                         await notify_service.send(summary, channels=board_channels)
                     except Exception:
@@ -347,6 +409,7 @@ async def _async_push_boards(
 # ---------------------------------------------------------------------------
 # Scheduler lifecycle
 # ---------------------------------------------------------------------------
+
 
 async def _register_board_schedules() -> None:
     """
@@ -377,7 +440,8 @@ async def _async_register_board_schedules() -> None:
             if not parsed:
                 logger.error(
                     "Board '%s' has invalid schedule time '%s', skipping.",
-                    board.slug, time_str,
+                    board.slug,
+                    time_str,
                 )
                 continue
 
@@ -390,9 +454,7 @@ async def _async_register_board_schedules() -> None:
                 name=f"Push [{board.slug}] at {hour:02d}:{minute:02d}",
                 replace_existing=True,
             )
-            logger.info(
-                "Registered per-board push: '%s' at %02d:%02d", board.slug, hour, minute
-            )
+            logger.info("Registered per-board push: '%s' at %02d:%02d", board.slug, hour, minute)
 
 
 async def start_scheduler() -> None:

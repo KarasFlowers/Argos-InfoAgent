@@ -1,7 +1,8 @@
 """Repository helpers for board-scoped RSS sources."""
+
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,7 +63,7 @@ class SourceRepo:
     ) -> list[Source]:
         stmt = select(Source).where(Source.board_id == board_id, Source.source_type == source_type)
         if enabled_only:
-            stmt = stmt.where(Source.enabled == True)
+            stmt = stmt.where(Source.enabled.is_(True))
         stmt = stmt.order_by(Source.id)
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -180,7 +181,9 @@ class SourceRepo:
         if credibility_override is not None:
             source.credibility_override = credibility_override.strip()
         await session.flush()
-        active = _unique_urls([s.url for s in await self.list_board_sources(session, board.id, "rss", enabled_only=True)])
+        active = _unique_urls(
+            [s.url for s in await self.list_board_sources(session, board.id, "rss", enabled_only=True)]
+        )
         board.source_config = _with_rss_feeds_in_config(board.source_type, board.source_config, active)
         await session.commit()
         await session.refresh(source)
@@ -194,7 +197,9 @@ class SourceRepo:
             return False
         source.enabled = False
         await session.flush()
-        active = _unique_urls([s.url for s in await self.list_board_sources(session, board.id, "rss", enabled_only=True)])
+        active = _unique_urls(
+            [s.url for s in await self.list_board_sources(session, board.id, "rss", enabled_only=True)]
+        )
         board.source_config = _with_rss_feeds_in_config(board.source_type, board.source_config, active)
         await session.commit()
         return True

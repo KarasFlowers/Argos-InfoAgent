@@ -11,22 +11,34 @@ unchanged.
 
 Routes that are always public (no key required):
   - GET /              (homepage)
+  - GET /favicon.ico   (browser icon probe)
   - GET /static/*      (static assets)
+  - GET /feed          (public HTML feed)
+  - GET /feed/*        (public feed subpages)
   - GET /api/v1/ping   (health check)
+  - OPTIONS *          (CORS preflight only; no business side effects)
 """
 
 from __future__ import annotations
 
+import hmac
 import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-# Paths that never require authentication.
-_PUBLIC_PATH_PREFIXES = ("/", "/static", "/feed", "/api/v1/ping")
+# Paths that never require authentication. Keep exact and prefix matches
+# separate so "/" does not accidentally make every route public.
+_PUBLIC_EXACT_PATHS = {"/", "/favicon.ico", "/feed", "/api/v1/ping"}
+_PUBLIC_PATH_PREFIXES = ("/static/", "/feed/")
+
+
+def _api_key_matches(provided: str, expected: str) -> bool:
+    """Compare API keys without leaking prefix-match timing."""
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -45,9 +57,13 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if self._is_public_path(request.url.path):
             return await call_next(request)
 
+        # CORS preflight must not be rejected before CORSMiddleware can answer.
+        if self._is_cors_preflight(request):
+            return await call_next(request)
+
         # Check header
         provided = request.headers.get("X-API-Key", "")
-        if provided == self._api_key:
+        if _api_key_matches(provided, self._api_key):
             return await call_next(request)
 
         logger.warning(
@@ -62,7 +78,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _is_public_path(path: str) -> bool:
-        for prefix in _PUBLIC_PATH_PREFIXES:
-            if path == prefix or path.startswith(prefix + ("/" if prefix != "/" else "")):
-                return True
-        return False
+        return path in _PUBLIC_EXACT_PATHS or any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES)
+
+    @staticmethod
+    def _is_cors_preflight(request: Request) -> bool:
+        return (
+            request.method == "OPTIONS"
+            and "origin" in request.headers
+            and "access-control-request-method" in request.headers
+        )

@@ -1,16 +1,19 @@
 """Tests for the memory_service module."""
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import pytest
 
 # ---------------------------------------------------------------------------
 # Unit tests for _build_rag_prompt with history + memory
 # ---------------------------------------------------------------------------
 
+
 class TestBuildRagPromptWithHistory:
     def test_no_history_no_memory(self):
         from app.services.rag._core import _build_rag_prompt
+
         result = _build_rag_prompt("What is AI?", ["AI is artificial intelligence."])
         assert "【原文相关段落】" in result
         assert "【对话历史】" not in result
@@ -18,6 +21,7 @@ class TestBuildRagPromptWithHistory:
 
     def test_with_history(self):
         from app.services.rag._core import _build_rag_prompt
+
         history = [
             {"role": "user", "content": "What is machine learning?"},
             {"role": "ai", "content": "Machine learning is a subset of AI."},
@@ -29,6 +33,7 @@ class TestBuildRagPromptWithHistory:
 
     def test_history_capped_at_six(self):
         from app.services.rag._core import _build_rag_prompt
+
         history = [{"role": "user", "content": f"Q{i}"} for i in range(10)]
         result = _build_rag_prompt("Next", ["Chunk."], history=history)
         # Should only include last 6 messages
@@ -38,6 +43,7 @@ class TestBuildRagPromptWithHistory:
 
     def test_with_memory_context(self):
         from app.services.rag._core import _build_rag_prompt
+
         result = _build_rag_prompt(
             "What is RAG?",
             ["RAG is retrieval-augmented generation."],
@@ -48,6 +54,7 @@ class TestBuildRagPromptWithHistory:
 
     def test_with_history_and_memory(self):
         from app.services.rag._core import _build_rag_prompt
+
         history = [{"role": "user", "content": "Hello"}]
         result = _build_rag_prompt(
             "Hi again",
@@ -63,14 +70,17 @@ class TestBuildRagPromptWithHistory:
 # Unit tests for semantic_split
 # ---------------------------------------------------------------------------
 
+
 class TestSemanticSplit:
     def test_empty_text(self):
         from app.services.rag._core import semantic_split
+
         assert semantic_split("") == []
         assert semantic_split("   ") == []
 
     def test_short_text_single_chunk(self):
         from app.services.rag._core import semantic_split
+
         text = "This is a short paragraph."
         chunks = semantic_split(text, max_chars=800)
         assert len(chunks) == 1
@@ -78,6 +88,7 @@ class TestSemanticSplit:
 
     def test_heading_creates_new_chunk(self):
         from app.services.rag._core import semantic_split
+
         text = "Introduction text here.\n\n## Methods\n\nWe used the following methods."
         chunks = semantic_split(text, max_chars=800)
         # Heading should cause a split
@@ -87,6 +98,7 @@ class TestSemanticSplit:
 
     def test_multiple_paragraphs_grouped(self):
         from app.services.rag._core import semantic_split
+
         text = "Para one.\n\nPara two.\n\nPara three."
         chunks = semantic_split(text, max_chars=800)
         # All should be grouped into one chunk since they fit
@@ -94,6 +106,7 @@ class TestSemanticSplit:
 
     def test_max_chars_respected(self):
         from app.services.rag._core import semantic_split
+
         # Create text that exceeds max_chars
         text = "A" * 500 + "\n\n" + "B" * 500
         chunks = semantic_split(text, max_chars=600)
@@ -103,6 +116,7 @@ class TestSemanticSplit:
 
     def test_oversized_paragraph_fallback(self):
         from app.services.rag._core import semantic_split
+
         # Single paragraph with no sentence boundaries that exceeds max_chars
         text = "A" * 1000
         chunks = semantic_split(text, max_chars=600)
@@ -113,12 +127,14 @@ class TestSemanticSplit:
 
     def test_horizontal_rule_boundary(self):
         from app.services.rag._core import semantic_split
+
         text = "First section.\n\n---\n\nSecond section."
         chunks = semantic_split(text, max_chars=800)
         assert len(chunks) == 2
 
     def test_preserves_content(self):
         from app.services.rag._core import semantic_split
+
         text = "First paragraph with important info.\n\nSecond paragraph with more details."
         chunks = semantic_split(text, max_chars=800)
         full = " ".join(chunks)
@@ -126,9 +142,42 @@ class TestSemanticSplit:
         assert "Second paragraph" in full
 
 
+class TestArticleFetchBounds:
+    def test_bounded_response_text_accepts_normal_html(self):
+        from app.services.rag._core import _bounded_response_text
+
+        response = httpx.Response(200, content=b"<html><p>Hello</p></html>")
+
+        assert _bounded_response_text(response, url="https://example.com/a") == "<html><p>Hello</p></html>"
+
+    def test_bounded_response_text_rejects_large_html(self):
+        from app.services.rag._core import MAX_ARTICLE_HTML_BYTES, _bounded_response_text
+
+        response = httpx.Response(200, content=b"x" * (MAX_ARTICLE_HTML_BYTES + 1))
+
+        with pytest.raises(ValueError, match="too large"):
+            _bounded_response_text(response, url="https://example.com/a")
+
+    @pytest.mark.asyncio
+    async def test_fetch_article_text_blocks_trailing_dot_localhost_before_fetch(self, monkeypatch):
+        from app.services.rag import _core
+
+        class FailingClient:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("HTTP client should not be created for unsafe URLs")
+
+        _core._article_text_cache.pop("http://localhost./article", None)
+        _core._article_text_tasks.pop("http://localhost./article", None)
+        monkeypatch.setattr(_core.httpx, "AsyncClient", FailingClient)
+
+        with pytest.raises(ValueError, match="blocklist"):
+            await _core.fetch_article_text("http://localhost./article")
+
+
 # ---------------------------------------------------------------------------
 # Unit tests for memory_service
 # ---------------------------------------------------------------------------
+
 
 class TestMemoryService:
     @pytest.mark.asyncio
@@ -139,8 +188,7 @@ class TestMemoryService:
             mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            from app.models.domain import UserMemory
-            from app.services.memory_service import save_memory, get_memory
+            from app.services.memory_service import save_memory
 
             # Mock: no existing entry
             mock_result = MagicMock()
@@ -165,6 +213,7 @@ class TestMemoryService:
             mock_session.execute.return_value = mock_result
 
             from app.services.memory_service import build_memory_context
+
             result = await build_memory_context()
             assert result == ""
 
@@ -184,6 +233,7 @@ class TestMemoryService:
             mock_session.execute.return_value = mock_result
 
             from app.services.memory_service import build_memory_context
+
             result = await build_memory_context()
             assert "lang: 中文" in result
             assert "topic: RAG" in result
@@ -204,6 +254,7 @@ class TestMemoryService:
             mock_session.execute.return_value = mock_result
 
             from app.services.memory_service import delete_memory
+
             result = await delete_memory("test")
             assert result is True
             assert existing.is_active is False
@@ -213,9 +264,11 @@ class TestMemoryService:
 # Unit tests for cross-article prompt builder
 # ---------------------------------------------------------------------------
 
+
 class TestCrossArticlePrompt:
     def test_includes_source_url(self):
         from app.services.rag._core import _build_cross_article_prompt
+
         chunks = [
             {"chunk": "AI is transforming industries.", "source_url": "https://example.com/article1"},
             {"chunk": "ML models require data.", "source_url": "https://example.com/article2"},

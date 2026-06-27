@@ -188,8 +188,12 @@ async def test_rerank_summary_items_uses_board_scoped_explicit_preferences(isola
         ),
     ]
 
-    board_a_items = await rerank_summary_items([item.model_copy(deep=True) for item in items], session=isolated_session, board_id=board_a.id)
-    board_b_items = await rerank_summary_items([item.model_copy(deep=True) for item in items], session=isolated_session, board_id=board_b.id)
+    board_a_items = await rerank_summary_items(
+        [item.model_copy(deep=True) for item in items], session=isolated_session, board_id=board_a.id
+    )
+    board_b_items = await rerank_summary_items(
+        [item.model_copy(deep=True) for item in items], session=isolated_session, board_id=board_b.id
+    )
 
     assert [item.headline for item in board_a_items] == ["LLM compiler update"]
     assert [item.headline for item in board_b_items] == ["Crypto market update", "LLM compiler update"]

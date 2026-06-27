@@ -24,9 +24,10 @@ Example ``board.source_config``::
         }
     }
 """
+
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import httpx
@@ -61,6 +62,7 @@ class MultiSourceAdapter(SourceAdapter):
         source_table_rss_feeds: list[str] = []
         try:
             from app.services.db_service import db_service
+
             source_table_rss_feeds = await db_service.get_board_rss_feeds(session, board)
         except Exception as exc:
             logger.debug("MultiSourceAdapter Source lookup skipped for board '%s': %s", board.slug, exc)
@@ -72,11 +74,12 @@ class MultiSourceAdapter(SourceAdapter):
             )
             return None, {}
 
-        since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        since = datetime.now(UTC) - timedelta(hours=since_hours)
 
         all_items: list[ContentItem] = []
 
         from app.core.http_client import get_http_client
+
         client = get_http_client()
 
         tasks: list[asyncio.Task] = []
@@ -92,23 +95,17 @@ class MultiSourceAdapter(SourceAdapter):
         # Hacker News
         hn_cfg = sources_cfg.get("hackernews")
         if hn_cfg:
-            tasks.append(
-                asyncio.create_task(self._fetch_hn(hn_cfg, since, client))
-            )
+            tasks.append(asyncio.create_task(self._fetch_hn(hn_cfg, since, client)))
 
         # Reddit
         reddit_cfg = sources_cfg.get("reddit")
         if reddit_cfg:
-            tasks.append(
-                asyncio.create_task(self._fetch_reddit(reddit_cfg, since, client))
-            )
+            tasks.append(asyncio.create_task(self._fetch_reddit(reddit_cfg, since, client)))
 
         # GitHub
         github_cfg = sources_cfg.get("github")
         if github_cfg:
-            tasks.append(
-                asyncio.create_task(self._fetch_github(github_cfg, since, client))
-            )
+            tasks.append(asyncio.create_task(self._fetch_github(github_cfg, since, client)))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -124,7 +121,9 @@ class MultiSourceAdapter(SourceAdapter):
 
         logger.info(
             "MultiSourceAdapter: %d items from %d sub-sources for board '%s'",
-            len(all_items), len(tasks), board.slug,
+            len(all_items),
+            len(tasks),
+            board.slug,
         )
 
         from app.services.llm_service import llm_service
@@ -151,9 +150,7 @@ class MultiSourceAdapter(SourceAdapter):
         return rss_responses_to_content_items(responses)
 
     @staticmethod
-    async def _fetch_hn(
-        cfg: dict, since: datetime, client: httpx.AsyncClient
-    ) -> list[ContentItem]:
+    async def _fetch_hn(cfg: dict, since: datetime, client: httpx.AsyncClient) -> list[ContentItem]:
         from app.scrapers.hackernews import HackerNewsScraper
 
         scraper_cfg = {
@@ -165,9 +162,7 @@ class MultiSourceAdapter(SourceAdapter):
         return await scraper.fetch(since)
 
     @staticmethod
-    async def _fetch_reddit(
-        cfg: dict, since: datetime, client: httpx.AsyncClient
-    ) -> list[ContentItem]:
+    async def _fetch_reddit(cfg: dict, since: datetime, client: httpx.AsyncClient) -> list[ContentItem]:
         from app.scrapers.reddit import RedditScraper
 
         scraper_cfg = {
@@ -180,9 +175,7 @@ class MultiSourceAdapter(SourceAdapter):
         return await scraper.fetch(since)
 
     @staticmethod
-    async def _fetch_github(
-        cfg: dict, since: datetime, client: httpx.AsyncClient
-    ) -> list[ContentItem]:
+    async def _fetch_github(cfg: dict, since: datetime, client: httpx.AsyncClient) -> list[ContentItem]:
         from app.scrapers.github import GitHubScraper
 
         scraper_cfg = {

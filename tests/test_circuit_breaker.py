@@ -1,9 +1,9 @@
 """Tests for CircuitBreaker state transitions and recovery."""
 
 import time
-import pytest
+from unittest.mock import patch
 
-from app.services.llm.client import CircuitBreaker, CircuitOpenError
+from app.services.llm.client import CircuitBreaker
 
 URL = "https://api.example.com"
 MODEL = "test-model"
@@ -55,19 +55,21 @@ class TestCircuitBreakerStates:
 
     def test_failure_reopens_after_half_open(self):
         cb = CircuitBreaker(failure_threshold=1, open_seconds=0.01)
-        cb.record_failure(URL, MODEL)
-        time.sleep(0.02)
-        assert not cb.is_open(URL, MODEL)  # half-open
-        cb.record_failure(URL, MODEL)
-        assert cb.is_open(URL, MODEL)  # re-opened
+        with patch("app.services.llm.client.time.monotonic") as monotonic:
+            monotonic.side_effect = [0.0, 0.02, 0.021, 0.022]
+            cb.record_failure(URL, MODEL)
+            assert not cb.is_open(URL, MODEL)  # half-open
+            cb.record_failure(URL, MODEL)
+            assert cb.is_open(URL, MODEL)  # re-opened
 
     def test_rolling_window_expiry(self):
         """Failures outside rolling window should not count."""
         cb = CircuitBreaker(failure_threshold=3, window_seconds=0.05, open_seconds=9999)
-        cb.record_failure(URL, MODEL)
-        cb.record_failure(URL, MODEL)
-        time.sleep(0.06)
-        cb.record_failure(URL, MODEL)
+        with patch("app.services.llm.client.time.monotonic") as monotonic:
+            monotonic.side_effect = [0.0, 0.01, 0.07]
+            cb.record_failure(URL, MODEL)
+            cb.record_failure(URL, MODEL)
+            cb.record_failure(URL, MODEL)
         # Only 1 failure within window
         assert not cb.is_open(URL, MODEL)
 

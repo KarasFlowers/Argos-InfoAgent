@@ -1,4 +1,5 @@
 """Weekly consolidation / recap generation — multi-stage pipeline."""
+
 import asyncio
 import json
 import logging
@@ -17,9 +18,7 @@ def _build_week_data(summaries: list[dict]) -> str:
         date = s.get("date", "Unknown Date")
         overview = s.get("overview", "")
         headlines = [n.get("headline", "") for n in s.get("top_news", [])]
-        daily_inputs.append(
-            f"### {date}\nOverview: {overview}\nHeadlines: {', '.join(headlines)}"
-        )
+        daily_inputs.append(f"### {date}\nOverview: {overview}\nHeadlines: {', '.join(headlines)}")
     return "\n\n".join(daily_inputs)
 
 
@@ -65,13 +64,8 @@ async def _enrich_themes(themes: list[dict], llm) -> None:
             return
 
         available = {r["url"]: r["title"] for r in results if r.get("url")}
-        web_context = "\n".join(
-            f"- [{r['title']}]({r['url']}): {r['content']}" for r in results
-        )
-        user = (
-            f"Theme: {label}\nArc summary: {arc}\n\n"
-            f"Web search results:\n{web_context}"
-        )
+        web_context = "\n".join(f"- [{r['title']}]({r['url']}): {r['content']}" for r in results)
+        user = f"Theme: {label}\nArc summary: {arc}\n\n" f"Web search results:\n{web_context}"
         try:
             response = await llm.chat(
                 messages=[
@@ -117,6 +111,7 @@ class WeeklyMixin:
             return None
 
         from app.core.llm_config import language_directive
+
         week_data = _build_week_data(summaries)
         editor_prompt = get_prompt("weekly_editor") + language_directive(output_language)
 
@@ -157,6 +152,7 @@ class WeeklyMixin:
             return None
 
         from app.core.llm_config import language_directive
+
         lang_directive = language_directive(output_language)
         week_data = _build_week_data(summaries)
         result: dict[str, Any] = {"themes": [], "stats": {}, "editorial": ""}
@@ -183,10 +179,7 @@ class WeeklyMixin:
         # Stage 2: Statistics summary (fast LLM)
         try:
             stats_prompt = get_prompt("weekly_stats")
-            stats_input = (
-                f"Themes:\n{json.dumps(result['themes'], ensure_ascii=False)}\n\n"
-                f"Daily data:\n{week_data}"
-            )
+            stats_input = f"Themes:\n{json.dumps(result['themes'], ensure_ascii=False)}\n\n" f"Daily data:\n{week_data}"
             stats_response = await self.llm.chat(
                 messages=[
                     {"role": "system", "content": stats_prompt},
@@ -216,9 +209,7 @@ class WeeklyMixin:
             if result["themes"]:
                 themes_context = "\n\nKey themes identified this week:\n"
                 for t in result["themes"]:
-                    themes_context += (
-                        f"- **{t.get('label', '')}**: {t.get('arc_summary', '')}\n"
-                    )
+                    themes_context += f"- **{t.get('label', '')}**: {t.get('arc_summary', '')}\n"
                     enrich = t.get("enrichment")
                     if enrich:
                         if enrich.get("whats_new"):
@@ -233,10 +224,7 @@ class WeeklyMixin:
                     {"role": "system", "content": editor_prompt},
                     {
                         "role": "user",
-                        "content": (
-                            f"Here is the data from the past 7 days:\n\n{week_data}"
-                            f"{themes_context}"
-                        ),
+                        "content": (f"Here is the data from the past 7 days:\n\n{week_data}" f"{themes_context}"),
                     },
                 ],
                 tier="smart",

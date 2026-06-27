@@ -7,16 +7,23 @@ Tests:
   - SQLite URI resolution
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import patch
 
-from app.core.config import _resolve_path, _resolve_sqlite_uri, PROJECT_ROOT
+import pytest
+from pydantic import ValidationError
 
+from app.core.config import (
+    PROJECT_ROOT,
+    Settings,
+    _resolve_path,
+    _resolve_sqlite_uri,
+    effective_cors_allow_credentials,
+)
 
 # ---------------------------------------------------------------------------
 # _resolve_path
 # ---------------------------------------------------------------------------
+
 
 class TestResolvePath:
     def test_relative_path_resolves_to_project_root(self):
@@ -27,6 +34,7 @@ class TestResolvePath:
     def test_absolute_path_unchanged(self):
         # Use a Windows-compatible absolute path
         import sys
+
         if sys.platform == "win32":
             abs_path = "C:\\tmp\\argos-test"
         else:
@@ -46,6 +54,7 @@ class TestResolvePath:
 # _resolve_sqlite_uri
 # ---------------------------------------------------------------------------
 
+
 class TestResolveSqliteUri:
     def test_relative_path_resolved(self):
         result = _resolve_sqlite_uri("sqlite+aiosqlite:///data/argos.db")
@@ -57,6 +66,7 @@ class TestResolveSqliteUri:
 
     def test_absolute_path_unchanged(self):
         import sys
+
         if sys.platform == "win32":
             uri = "sqlite+aiosqlite:///C:/tmp/test.db"
         else:
@@ -79,17 +89,58 @@ class TestResolveSqliteUri:
 # Settings defaults
 # ---------------------------------------------------------------------------
 
+
 class TestSettingsDefaults:
     def test_project_name(self):
         from app.core.config import settings
+
         assert settings.PROJECT_NAME == "Argos"
 
     def test_version_format(self):
         from app.core.config import settings
+
         # Should be semver-like
         parts = settings.VERSION.split(".")
         assert len(parts) >= 2
 
     def test_api_prefix(self):
         from app.core.config import settings
+
         assert settings.API_V1_STR.startswith("/api")
+
+
+class TestSettingsValidation:
+    def test_public_base_url_must_be_absolute_http_url(self):
+        with pytest.raises(ValidationError, match="PUBLIC_BASE_URL"):
+            Settings(PUBLIC_BASE_URL="argos.local")
+
+    def test_public_base_url_rejects_query_and_trims_trailing_slash(self):
+        with pytest.raises(ValidationError, match="PUBLIC_BASE_URL"):
+            Settings(PUBLIC_BASE_URL="https://argos.example.com/app?x=1")
+
+        settings = Settings(PUBLIC_BASE_URL="https://argos.example.com/")
+        assert settings.PUBLIC_BASE_URL == "https://argos.example.com"
+
+    def test_cors_origins_must_be_origins(self):
+        with pytest.raises(ValidationError, match="CORS_ORIGINS"):
+            Settings(CORS_ORIGINS="https://app.example.com/path")
+
+        settings = Settings(CORS_ORIGINS="https://app.example.com/, http://localhost:5173")
+        assert settings.CORS_ORIGINS == ["https://app.example.com", "http://localhost:5173"]
+
+    def test_wildcard_cors_disables_credentials(self):
+        settings = Settings(CORS_ORIGINS="*", CORS_ALLOW_CREDENTIALS=True)
+
+        assert settings.CORS_ORIGINS == ["*"]
+        assert effective_cors_allow_credentials(settings.CORS_ORIGINS, settings.CORS_ALLOW_CREDENTIALS) is False
+
+    def test_explicit_cors_origins_can_allow_credentials(self):
+        settings = Settings(CORS_ORIGINS="https://app.example.com", CORS_ALLOW_CREDENTIALS=True)
+
+        assert effective_cors_allow_credentials(settings.CORS_ORIGINS, settings.CORS_ALLOW_CREDENTIALS) is True
+
+    def test_daily_push_time_must_be_valid_hhmm(self):
+        with pytest.raises(ValidationError, match="DAILY_PUSH_TIME"):
+            Settings(DAILY_PUSH_TIME="24:00")
+
+        assert Settings(DAILY_PUSH_TIME="23:59").DAILY_PUSH_TIME == "23:59"

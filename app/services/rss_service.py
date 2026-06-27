@@ -1,25 +1,30 @@
 import asyncio
 import hashlib
+import logging
+
 import feedparser
 import httpx
 from pydantic import ValidationError
+
+from app.core.http_client import get_http_client
+from app.core.url_safety import get_public_url
 from app.models.schemas import ContentItem, RSSItem, RSSResponse
 from app.services.redis_service import redis_service
-from app.core.http_client import get_http_client
-import logging
 
 logger = logging.getLogger(__name__)
+
+MAX_RSS_FEED_BYTES = 5 * 1024 * 1024
+
 
 async def fetch_and_parse_feed(url: str, client: httpx.AsyncClient) -> RSSResponse | None:
     """
     Fetches a single RSS feed, checks cache first, and parses it into our standard schema.
     """
-    import time as _time
 
     try:
         # Cache Key logic
         cache_key = f"rss_feed_{url}"
-        
+
         # 1. Check Redis Cache
         cached_data = await redis_service.get_cache(cache_key)
         if cached_data:
@@ -28,46 +33,46 @@ async def fetch_and_parse_feed(url: str, client: httpx.AsyncClient) -> RSSRespon
 
         # 2. Cache Miss - Fetch the RSS XML
         logger.info(f"Fetching from web: {url}")
-        t0 = _time.monotonic()
-        response = await client.get(url, timeout=10.0)
-        elapsed_ms = int((_time.monotonic() - t0) * 1000)
+        response = await get_public_url(client, url, timeout=10.0)
         response.raise_for_status()
+        if len(response.content) > MAX_RSS_FEED_BYTES:
+            raise ValueError(f"RSS feed response is too large ({len(response.content)} bytes).")
 
         # Log healthy fetch
         await _log_health(url, status="ok")
-        
+
         # Parse the XML using feedparser
         # Pass raw bytes so feedparser can detect encoding from XML declaration
         feed = feedparser.parse(response.content)
-        
+
         if not feed.entries:
             logger.warning(f"No entries found for {url}")
             return RSSResponse(source_url=url, items=[])
-            
-        source_title = feed.feed.get('title', url)
-        
+
+        source_title = feed.feed.get("title", url)
+
         items = []
         for entry in feed.entries[:10]:  # Limit to 10 most recent per feed
             try:
                 # Extract basic fields safely with defaults
-                published = entry.get('published', '') or entry.get('updated', '') 
-                summary = entry.get('summary', '') or entry.get('description', '')
-                
+                published = entry.get("published", "") or entry.get("updated", "")
+                summary = entry.get("summary", "") or entry.get("description", "")
+
                 # Strip HTML from summary (basic cleaning)
                 # In production, might want a more robust HTML parser like BeautifulSoup here
-                
+
                 item = RSSItem(
-                    title=entry.get('title', 'Unknown Title'),
-                    link=entry.get('link', ''),
+                    title=entry.get("title", "Unknown Title"),
+                    link=entry.get("link", ""),
                     published=published,
                     summary=summary[:500],  # preview
-                    source=source_title
+                    source=source_title,
                 )
                 items.append(item)
             except ValidationError as e:
                 logger.error(f"Validation error for entry in {url}: {e}")
                 continue
-                
+
         # 3. Cache the successful result
         response_obj = RSSResponse(source_url=url, items=items)
         try:
@@ -78,9 +83,9 @@ async def fetch_and_parse_feed(url: str, client: httpx.AsyncClient) -> RSSRespon
             logger.info(f"Saved to cache: {url}")
         except Exception as e:
             logger.error(f"Failed to save to cache {url}: {e}")
-            
+
         return response_obj
-        
+
     except httpx.TimeoutException as e:
         logger.error(f"Timeout fetching feed {url}: {e}")
         await _log_health(url, status="timeout", error_message=str(e))
@@ -93,7 +98,7 @@ async def fetch_and_parse_feed(url: str, client: httpx.AsyncClient) -> RSSRespon
     except Exception as e:
         logger.error(f"Unexpected error parsing feed {url}: {e}")
         await _log_health(url, status="error", error_message=str(e))
-        
+
     return None
 
 
@@ -105,10 +110,12 @@ async def _log_health(
 ) -> None:
     """Best-effort: update source health fields directly. Silently skip if source not in DB."""
     try:
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select
+
         from app.core.db import AsyncSessionLocal
         from app.models.domain import Source
-        from sqlalchemy import select
 
         async with AsyncSessionLocal() as session:
             stmt = select(Source).where(Source.url == url).limit(1)
@@ -130,6 +137,7 @@ async def _log_health(
                 await session.commit()
     except Exception as err:
         logger.debug("Source health logging skipped: %s", err)
+
 
 async def fetch_all_feeds(urls: list[str]) -> list[RSSResponse]:
     """

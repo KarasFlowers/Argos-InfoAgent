@@ -1,8 +1,10 @@
 # First-run bootstrap: ensure .env + data dirs exist before anything reads config.
 # Guarded so that importing this module from tests/MCP doesn't trigger interactive prompts.
 import sys as _sys
+
 if _sys.argv and "uvicorn" in _sys.argv[0].lower() or __name__ == "__main__":
     from app.core.first_run import run_first_time_checks
+
     run_first_time_checks()
 
 from contextlib import asynccontextmanager
@@ -16,12 +18,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api.router import api_router
 from app.api.rag_router import rag_router
+from app.api.router import api_router
 from app.core.auth import APIKeyMiddleware
-from app.core.config import settings
+from app.core.config import effective_cors_allow_credentials, settings
 from app.core.db import init_db
-from app.core.logging_config import setup_logging, new_trace_id
+from app.core.logging_config import bind_new_trace_id, reset_trace_id, setup_logging
 
 # ---- Initialise structured logging BEFORE anything else logs ----
 setup_logging()
@@ -33,15 +35,15 @@ STATIC_DIR = WEB_ROOT / "static"
 TEMPLATES_DIR = WEB_ROOT / "templates"
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
-    from app.services import rag_service
-    from app.core.scheduler import start_scheduler, shutdown_scheduler
 
     # Ensure data directories exist (covers cases where first_run was skipped)
     from app.core.first_run import ensure_data_dirs
+    from app.core.scheduler import shutdown_scheduler, start_scheduler
+    from app.services import rag_service
+
     ensure_data_dirs()
 
     # This runs when the server starts up
@@ -83,6 +85,7 @@ async def lifespan(app: FastAPI):
 
     # Cancel all tracked background tasks (e.g. catchup backfill)
     from app.core.background import cancel_all_background_tasks
+
     await cancel_all_background_tasks()
 
     # Shutdown scheduler
@@ -98,10 +101,12 @@ async def lifespan(app: FastAPI):
 
     # Close shared httpx client
     from app.core.http_client import close_http_client
+
     await close_http_client()
 
     # Close Redis connection
     from app.services.redis_service import redis_service
+
     await redis_service.close()
 
     # Shutdown: send sentinel per worker, then wait
@@ -121,22 +126,39 @@ async def lifespan(app: FastAPI):
     rag_service.close_chroma_client()
     logger.info("application_stopped")
 
+
 app = FastAPI(
     title="Argos API",
     description="Backend for the daily LLM information aggregation agent.",
     version="0.1.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
+
 
 # ---- TraceID Middleware ----
 class TraceIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        tid = new_trace_id()
+        tid, token = bind_new_trace_id()
+        try:
+            response = await call_next(request)
+            response.headers["X-Trace-ID"] = tid
+            return response
+        finally:
+            reset_trace_id(token)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        response.headers["X-Trace-ID"] = tid
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         return response
 
+
 app.add_middleware(TraceIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # API Key authentication (inert when API_KEY is not set)
 if settings.API_KEY:
@@ -147,7 +169,7 @@ if settings.API_KEY:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=settings.CORS_ALLOW_CREDENTIALS and "*" not in settings.CORS_ORIGINS,
+    allow_credentials=effective_cors_allow_credentials(settings.CORS_ORIGINS, settings.CORS_ALLOW_CREDENTIALS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -160,6 +182,7 @@ app.include_router(rag_router, prefix="/api/v1")  # RAG endpoints return 503 whe
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(status_code=204)
@@ -168,21 +191,19 @@ async def favicon():
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     # Updated signature for Starlette/FastAPI 0.111.0+ compatibility
-    return templates.TemplateResponse(
-        request=request, 
-        name="index.html", 
-        context={}
-    )
+    return templates.TemplateResponse(request=request, name="index.html", context={})
 
 
 @app.get("/feed", response_class=HTMLResponse)
 async def public_feed(request: Request, date: str = "", board: str = ""):
     """Public SEO-friendly HTML feed page — no auth required."""
     from datetime import datetime as _dt
+
     from app.core.db import AsyncSessionLocal
     from app.services.db_service import db_service
 
     search_date = date or _dt.now().strftime("%Y-%m-%d")
+    site_url = settings.PUBLIC_BASE_URL.rstrip("/")
     async with AsyncSessionLocal() as session:
         board_obj = None
         if board:
@@ -202,7 +223,8 @@ async def public_feed(request: Request, date: str = "", board: str = ""):
             context={
                 "title": f"Argos Daily Briefing — {search_date}",
                 "description": "No briefing available for this date.",
-                "canonical_url": f"/feed?date={search_date}",
+                "canonical_url": f"{site_url}/feed?date={search_date}",
+                "rss_url": f"{site_url}/api/v1/feed",
                 "date": search_date,
                 "board_name": board_name,
                 "overview": "该日期暂无简报。",
@@ -225,7 +247,8 @@ async def public_feed(request: Request, date: str = "", board: str = ""):
         context={
             "title": title,
             "description": desc,
-            "canonical_url": f"/feed?date={search_date}&board={board_obj.slug if board_obj else ''}",
+            "canonical_url": f"{site_url}/feed?date={search_date}&board={board_obj.slug if board_obj else ''}",
+            "rss_url": f"{site_url}/api/v1/feed",
             "date": search_date,
             "board_name": board_name,
             "overview": summary.overview,

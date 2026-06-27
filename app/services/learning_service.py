@@ -12,12 +12,13 @@ Pipeline:
 
 import json
 import logging
-import numpy as np
-from sqlalchemy.future import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.domain import DailySummary, UserFeedback, NewsItem
+import numpy as np
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
 from app.core.db import AsyncSessionLocal
+from app.models.domain import DailySummary, NewsItem, UserFeedback
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,7 @@ async def get_user_feedback_profiles(
     Returns:
         (positive_centroid, negative_centroid), each can be None.
     """
+
     async def _load_profile_texts(active_session: AsyncSession) -> tuple[list[str], list[str]]:
         statement = select(UserFeedback.article_url, UserFeedback.sentiment)
         result = await active_session.execute(statement)
@@ -164,6 +166,7 @@ async def get_user_feedback_profiles(
 
     try:
         from app.services.rag_service import get_bi_encoder
+
         bi_encoder = get_bi_encoder()
     except RuntimeError as exc:
         logger.debug("Feedback vector profile skipped: %s", exc)
@@ -207,10 +210,10 @@ async def get_inferred_interests(
     stmt = select(UserFeedback.article_url).where(UserFeedback.sentiment == 1)
     res = await session.execute(stmt)
     liked_urls = res.scalars().all()
-    
+
     if not liked_urls:
         return []
-        
+
     # 2. Fetch tags and categories for these URLs
     stmt = select(NewsItem.category, NewsItem.tags).where(NewsItem.original_link.in_(liked_urls))
     if board_id is not None:
@@ -226,14 +229,14 @@ async def get_inferred_interests(
         )
     res = await session.execute(stmt)
     rows = res.all()
-    
+
     categories = {}
     tags = {}
-    
+
     for cat, tags_json in rows:
         if cat:
             categories[cat] = categories.get(cat, 0) + 1
-        
+
         if isinstance(tags_json, list):
             item_tags = tags_json
         elif isinstance(tags_json, str):
@@ -245,17 +248,17 @@ async def get_inferred_interests(
             item_tags = []
         for t in item_tags:
             tags[t] = tags.get(t, 0) + 1
-            
+
     # Sort and pick top
     sorted_cats = sorted(categories.items(), key=lambda x: x[1], reverse=True)
     sorted_tags = sorted(tags.items(), key=lambda x: x[1], reverse=True)
-    
+
     results = []
     for name, count in sorted_cats[:limit]:
         results.append({"name": name, "count": count, "type": "category"})
     for name, count in sorted_tags[:limit]:
         results.append({"name": name, "count": count, "type": "tag"})
-        
+
     return results
 
 
@@ -280,13 +283,16 @@ async def rerank_summary_items(
 
     # --- Phase 1: Explicit preferences ---
     prefs: dict[str, list[str]] = {
-        "focus_topic": [], "block_topic": [],
-        "prefer_source": [], "avoid_source": [],
+        "focus_topic": [],
+        "block_topic": [],
+        "prefer_source": [],
+        "avoid_source": [],
     }
 
     if session:
         try:
             from app.services.db_service import db_service
+
             prefs = await db_service.get_explicit_preferences(session, board_id=board_id)
         except Exception:
             pass
@@ -320,6 +326,7 @@ async def rerank_summary_items(
     embeddings = None
     if has_vectors:
         from app.services.rag_service import get_bi_encoder
+
         bi_encoder = get_bi_encoder()
 
         texts = []
@@ -374,9 +381,10 @@ async def auto_extract_interests(session: AsyncSession) -> int:
 
     Returns the number of new auto-extracted interests saved.
     """
-    from app.services.llm_service import llm_service
+    from datetime import UTC, datetime
+
     from app.models.domain import UserPersona
-    from datetime import datetime, UTC
+    from app.services.llm_service import llm_service
 
     # Get liked article URLs
     stmt = select(UserFeedback.article_url).where(UserFeedback.sentiment == 1)
@@ -388,15 +396,15 @@ async def auto_extract_interests(session: AsyncSession) -> int:
     # Get existing auto-extracted persona contents to avoid duplicates
     existing_stmt = select(UserPersona.content).where(
         UserPersona.source == "auto",
-        UserPersona.is_active == True,
+        UserPersona.is_active.is_(True),
     )
     existing_res = await session.execute(existing_stmt)
     existing_contents = {row[0] for row in existing_res.all()}
 
     # Get liked article details
-    article_stmt = select(
-        NewsItem.headline, NewsItem.key_points, NewsItem.tags, NewsItem.original_link
-    ).where(NewsItem.original_link.in_(liked_urls))
+    article_stmt = select(NewsItem.headline, NewsItem.key_points, NewsItem.tags, NewsItem.original_link).where(
+        NewsItem.original_link.in_(liked_urls)
+    )
     article_res = await session.execute(article_stmt)
     articles = article_res.all()
 
@@ -404,7 +412,7 @@ async def auto_extract_interests(session: AsyncSession) -> int:
         return 0
 
     new_count = 0
-    for headline, key_points_raw, tags_raw, url in articles:
+    for headline, key_points_raw, tags_raw, _url in articles:
         # Parse key_points and tags
         if isinstance(key_points_raw, list):
             kp = key_points_raw
@@ -428,9 +436,7 @@ async def auto_extract_interests(session: AsyncSession) -> int:
 
         # Ask LLM for interest options
         try:
-            options = await llm_service.extract_interest_options(
-                headline=headline, key_points=kp, tags=tags
-            )
+            options = await llm_service.extract_interest_options(headline=headline, key_points=kp, tags=tags)
         except Exception:
             continue
 

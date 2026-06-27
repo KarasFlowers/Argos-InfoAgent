@@ -1,4 +1,5 @@
 """Catch-up digest generation — condenses multiple days of summaries into one briefing."""
+
 import json
 import logging
 
@@ -42,12 +43,8 @@ def _build_catchup_data(summaries: list[dict]) -> str:
             key_points = n.get("key_points", [])
             source = n.get("source", "")
             link = n.get("original_link", "")
-            items_detail.append(
-                f"  - {headline} ({source}) {link}\n    Key: {'; '.join(key_points[:3])}"
-            )
-        daily_inputs.append(
-            f"### {date}\nOverview: {overview}\nItems:\n" + "\n".join(items_detail)
-        )
+            items_detail.append(f"  - {headline} ({source}) {link}\n    Key: {'; '.join(key_points[:3])}")
+        daily_inputs.append(f"### {date}\nOverview: {overview}\nItems:\n" + "\n".join(items_detail))
     return "\n\n".join(daily_inputs)
 
 
@@ -96,9 +93,7 @@ class CatchupMixin:
         if candidate_richness != incumbent_richness:
             return candidate_richness > incumbent_richness
 
-        return int(candidate.get("_origin_order", 0) or 0) > int(
-            incumbent.get("_origin_order", 0) or 0
-        )
+        return int(candidate.get("_origin_order", 0) or 0) > int(incumbent.get("_origin_order", 0) or 0)
 
     @classmethod
     def _dedupe_catchup_summaries(cls, summaries: list[dict]) -> list[dict]:
@@ -218,9 +213,7 @@ class CatchupMixin:
         ]
         return await self._score_flat_items(flat_items)
 
-    async def _score_catchup_items(
-        self, summaries: list[dict]
-    ) -> list[dict]:
+    async def _score_catchup_items(self, summaries: list[dict]) -> list[dict]:
         """Pre-filter: score each top_news item across all summaries and drop low-importance ones.
 
         Returns a new list of summary dicts with only high-importance items retained.
@@ -233,12 +226,14 @@ class CatchupMixin:
         for s in summaries:
             date = s.get("date", "")
             for item_index, n in enumerate(s.get("top_news", [])):
-                flat_items.append({
-                    "index": len(flat_items),
-                    "date": date,
-                    "headline": n.get("headline", ""),
-                    "summary": "; ".join(n.get("key_points", []))[:200],
-                })
+                flat_items.append(
+                    {
+                        "index": len(flat_items),
+                        "date": date,
+                        "headline": n.get("headline", ""),
+                        "summary": "; ".join(n.get("key_points", []))[:200],
+                    }
+                )
                 origins.append((date, item_index))
 
         if not flat_items:
@@ -253,11 +248,7 @@ class CatchupMixin:
         filtered_summaries = []
         for s in summaries:
             date = s.get("date", "")
-            kept = [
-                n
-                for item_index, n in enumerate(s.get("top_news", []))
-                if (date, item_index) in passed_keys
-            ]
+            kept = [n for item_index, n in enumerate(s.get("top_news", [])) if (date, item_index) in passed_keys]
             if kept:
                 filtered_summaries.append({**s, "top_news": kept})
 

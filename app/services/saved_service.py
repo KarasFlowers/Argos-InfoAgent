@@ -3,6 +3,7 @@
 Two independent statuses are supported (``favorite`` and ``read_later``) so the
 same article URL can simultaneously be favorited and queued for later reading.
 """
+
 from __future__ import annotations
 
 import logging

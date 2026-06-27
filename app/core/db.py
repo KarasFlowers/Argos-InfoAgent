@@ -1,7 +1,9 @@
 from collections.abc import AsyncGenerator
-from sqlmodel import SQLModel
+
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlmodel import SQLModel
+
 from app.core.config import settings
 
 # Create the async engine
@@ -35,9 +37,7 @@ def _configure_sqlite(dbapi_connection, connection_record):
 
 
 # Module-level async session factory (preferred over constructing per-request)
-AsyncSessionLocal = async_sessionmaker(
-    engine, class_=AsyncSession, expire_on_commit=False
-)
+AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 async def _ensure_legacy_columns(conn) -> None:
@@ -103,12 +103,8 @@ async def _ensure_legacy_columns(conn) -> None:
     source_columns = {row[1] for row in source_result.fetchall()}
     if source_columns:
         if "credibility_override" not in source_columns:
-            await conn.exec_driver_sql(
-                "ALTER TABLE source ADD COLUMN credibility_override TEXT NOT NULL DEFAULT ''"
-            )
-        await conn.exec_driver_sql(
-            "UPDATE source SET credibility_override = '' WHERE credibility_override IS NULL"
-        )
+            await conn.exec_driver_sql("ALTER TABLE source ADD COLUMN credibility_override TEXT NOT NULL DEFAULT ''")
+        await conn.exec_driver_sql("UPDATE source SET credibility_override = '' WHERE credibility_override IS NULL")
 
 
 async def _migrate_dailysummary_date_uniqueness(conn) -> None:
@@ -154,6 +150,7 @@ async def _seed_default_board(conn) -> None:
     DailySummary / UserPersona rows with its id.
     """
     import json as _json
+
     from app.core.config import settings as _settings
 
     count_row = await conn.exec_driver_sql("SELECT COUNT(*) FROM board")
@@ -167,7 +164,7 @@ async def _seed_default_board(conn) -> None:
         "industry news for a busy CS student."
     )
     default_config = _json.dumps({"feeds": list(_settings.RSS_FEEDS)})
-    result = await conn.exec_driver_sql(
+    await conn.exec_driver_sql(
         "INSERT INTO board (slug, name, icon, description, system_prompt, "
         "source_type, source_config, display_order, is_active, is_default, schedule, notify_channels, created_at) "
         "VALUES ('tech', '科技快讯', '📰', '默认科技 / AI 简报', ?, 'rss', ?, 0, 1, 1, '', '', CURRENT_TIMESTAMP)",
@@ -211,9 +208,7 @@ async def _ensure_feedback_uniqueness(conn) -> None:
     indexes_result = await conn.exec_driver_sql("PRAGMA index_list(userfeedback)")
     existing_indexes = {row[1] for row in indexes_result.fetchall()}
     if "ux_userfeedback_article_url" not in existing_indexes:
-        await conn.exec_driver_sql(
-            "CREATE UNIQUE INDEX ux_userfeedback_article_url ON userfeedback(article_url)"
-        )
+        await conn.exec_driver_sql("CREATE UNIQUE INDEX ux_userfeedback_article_url ON userfeedback(article_url)")
 
 
 async def _migrate_json_columns(conn) -> None:
@@ -229,9 +224,7 @@ async def _migrate_json_columns(conn) -> None:
     import json as _json
 
     # --- NewsItem.key_points ---
-    rows = await conn.exec_driver_sql(
-        "SELECT id, key_points FROM newsitem WHERE typeof(key_points) = 'text'"
-    )
+    rows = await conn.exec_driver_sql("SELECT id, key_points FROM newsitem WHERE typeof(key_points) = 'text'")
     for row in rows.fetchall():
         rid, raw = row
         try:
@@ -246,9 +239,7 @@ async def _migrate_json_columns(conn) -> None:
             pass
 
     # --- NewsItem.tags ---
-    rows = await conn.exec_driver_sql(
-        "SELECT id, tags FROM newsitem WHERE typeof(tags) = 'text'"
-    )
+    rows = await conn.exec_driver_sql("SELECT id, tags FROM newsitem WHERE typeof(tags) = 'text'")
     for row in rows.fetchall():
         rid, raw = row
         try:
@@ -280,9 +271,7 @@ async def _migrate_json_columns(conn) -> None:
             pass
 
     # --- Board.source_config ---
-    rows = await conn.exec_driver_sql(
-        "SELECT id, source_config FROM board WHERE typeof(source_config) = 'text'"
-    )
+    rows = await conn.exec_driver_sql("SELECT id, source_config FROM board WHERE typeof(source_config) = 'text'")
     for row in rows.fetchall():
         rid, raw = row
         try:
@@ -306,52 +295,34 @@ async def _migrate_phase2_schema(conn) -> None:
     cols = await conn.exec_driver_sql("PRAGMA table_info(dailysummary)")
     col_names = {row[1] for row in cols.fetchall()}
     if "perspective" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE dailysummary ADD COLUMN perspective TEXT NOT NULL DEFAULT 'overview'"
-        )
+        await conn.exec_driver_sql("ALTER TABLE dailysummary ADD COLUMN perspective TEXT NOT NULL DEFAULT 'overview'")
 
     # --- NewsItem.topic_path ---
     cols = await conn.exec_driver_sql("PRAGMA table_info(newsitem)")
     col_names = {row[1] for row in cols.fetchall()}
     if "topic_path" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE newsitem ADD COLUMN topic_path TEXT NOT NULL DEFAULT ''"
-        )
+        await conn.exec_driver_sql("ALTER TABLE newsitem ADD COLUMN topic_path TEXT NOT NULL DEFAULT ''")
     if "cluster_id" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE newsitem ADD COLUMN cluster_id INTEGER"
-        )
-        await conn.exec_driver_sql(
-            "CREATE INDEX IF NOT EXISTS ix_newsitem_cluster_id ON newsitem(cluster_id)"
-        )
+        await conn.exec_driver_sql("ALTER TABLE newsitem ADD COLUMN cluster_id INTEGER")
+        await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_newsitem_cluster_id ON newsitem(cluster_id)")
 
     # --- Board.perspectives & prompt_key ---
     cols = await conn.exec_driver_sql("PRAGMA table_info(board)")
     col_names = {row[1] for row in cols.fetchall()}
     if "perspectives" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE board ADD COLUMN perspectives JSON"
-        )
+        await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN perspectives JSON")
     if "prompt_key" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE board ADD COLUMN prompt_key TEXT NOT NULL DEFAULT 'daily_briefing'"
-        )
+        await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN prompt_key TEXT NOT NULL DEFAULT 'daily_briefing'")
 
     # --- UserPersona.weight / source / last_refreshed ---
     cols = await conn.exec_driver_sql("PRAGMA table_info(userpersona)")
     col_names = {row[1] for row in cols.fetchall()}
     if "weight" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE userpersona ADD COLUMN weight REAL NOT NULL DEFAULT 1.0"
-        )
+        await conn.exec_driver_sql("ALTER TABLE userpersona ADD COLUMN weight REAL NOT NULL DEFAULT 1.0")
     if "source" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE userpersona ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
-        )
+        await conn.exec_driver_sql("ALTER TABLE userpersona ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
     if "last_refreshed" not in col_names:
-        await conn.exec_driver_sql(
-            "ALTER TABLE userpersona ADD COLUMN last_refreshed TIMESTAMP"
-        )
+        await conn.exec_driver_sql("ALTER TABLE userpersona ADD COLUMN last_refreshed TIMESTAMP")
 
 
 async def _seed_default_sources(conn) -> None:
@@ -360,8 +331,9 @@ async def _seed_default_sources(conn) -> None:
     Only runs when the Source table is empty. Maps each RSS feed URL
     to a Source row associated with the default board.
     """
-    from app.core.config import settings as _settings
     from urllib.parse import urlparse
+
+    from app.core.config import settings as _settings
 
     count_row = await conn.exec_driver_sql("SELECT COUNT(*) FROM source")
     existing = count_row.fetchone()[0]
@@ -483,6 +455,9 @@ async def _seed_default_model_api_configs(conn) -> None:
     """Seed the ModelApiConfig table from environment variables on first run.
 
     Only runs when the ModelApiConfig table is empty.
+    API keys are intentionally not persisted from environment variables; the
+    runtime client can read env config directly, and storing secrets in SQLite
+    by default is too easy to leak in backups or support bundles.
     """
     from app.core.config import settings as _settings
 
@@ -498,7 +473,7 @@ async def _seed_default_model_api_configs(conn) -> None:
         (
             "default",
             _settings.effective_llm_base_url,
-            _settings.effective_llm_api_key or "",
+            "",
             _settings.LLM_MODEL,
         ),
     )
@@ -506,52 +481,36 @@ async def _seed_default_model_api_configs(conn) -> None:
     # Fast tier if configured
     if _settings.FAST_LLM:
         from app.core.llm_config import parse_tier_spec
-        parsed = parse_tier_spec(_settings.FAST_LLM, _settings.effective_llm_base_url, _settings.effective_llm_api_key)
+
+        parsed = parse_tier_spec(_settings.FAST_LLM, _settings.effective_llm_base_url, None)
         if parsed:
             base_url, api_key, model = parsed
             await conn.exec_driver_sql(
                 "INSERT INTO modelapiconfig (name, base_url, api_key, model_name, concurrency, is_active, created_at) "
                 "VALUES (?, ?, ?, ?, 5, 1, CURRENT_TIMESTAMP)",
-                ("fast", base_url, api_key or "", model),
+                ("fast", base_url, "", model),
             )
 
     # Smart tier if configured
     if _settings.SMART_LLM:
         from app.core.llm_config import parse_tier_spec
-        parsed = parse_tier_spec(_settings.SMART_LLM, _settings.effective_llm_base_url, _settings.effective_llm_api_key)
+
+        parsed = parse_tier_spec(_settings.SMART_LLM, _settings.effective_llm_base_url, None)
         if parsed:
             base_url, api_key, model = parsed
             await conn.exec_driver_sql(
                 "INSERT INTO modelapiconfig (name, base_url, api_key, model_name, concurrency, is_active, created_at) "
                 "VALUES (?, ?, ?, ?, 3, 1, CURRENT_TIMESTAMP)",
-                ("smart", base_url, api_key or "", model),
+                ("smart", base_url, "", model),
             )
 
 
 async def init_db():
     """Create the database tables if they don't exist."""
     async with engine.begin() as conn:
-        # Import models here to ensure they form part of SQLModel.metadata
-        from app.models.domain import (
-            Board,
-            DailySummary,
-            NewsItem,
-            UserFeedback,
-            ChatMessage,
-            UserPersona,
-            UserMemory,
-            ArticleOverview,
-            Source,
-            ModelApiConfig,
-            TaskRun,
-            ContentCluster,
-            BlacklistKeyword,
-            FilteredItem,
-            DailyReportRefinementSession,
-            SummaryViewLog,
-            ArticleReadState,
-            SavedArticle,
-        )
+        # Import models here to ensure they form part of SQLModel.metadata.
+        from app.models import domain as _domain_models  # noqa: F401
+
         await conn.run_sync(SQLModel.metadata.create_all)
         await _ensure_legacy_columns(conn)
         await _migrate_dailysummary_date_uniqueness(conn)

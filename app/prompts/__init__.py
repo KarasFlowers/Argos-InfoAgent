@@ -57,7 +57,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         elif re.match(r"^\d+(\.\d+)?$", val):
             val = float(val)
         meta[key] = val
-    body = text[m.end():]
+    body = text[m.end() :]
     return meta, body
 
 
@@ -94,6 +94,7 @@ def _get_metadata(key: str) -> dict[str, Any]:
 # Jinja2 loader & environment
 # ---------------------------------------------------------------------------
 
+
 class _FileSystemLoader(BaseLoader):
     """Jinja2 loader that reads .md files, stripping frontmatter before rendering."""
 
@@ -127,6 +128,7 @@ _env.filters["require"] = _require_filter
 # Public API
 # ---------------------------------------------------------------------------
 
+
 @lru_cache(maxsize=32)
 def _load_template_cached(key: str):
     """Cache compiled templates (cleared on restart)."""
@@ -154,9 +156,7 @@ def get_prompt(key: str, *, required: bool = True, **variables: Any) -> str:
         return template.render(**variables)
     except TemplateNotFound:
         if required:
-            raise FileNotFoundError(
-                f"Prompt template '{key}' not found at {_PROMPTS_DIR / f'{key}.md'}"
-            )
+            raise FileNotFoundError(f"Prompt template '{key}' not found at {_PROMPTS_DIR / f'{key}.md'}") from None
         logger.warning("Optional prompt template '%s' not found, returning empty string", key)
         return ""
 
@@ -214,10 +214,7 @@ def is_prompt_selectable(key: str, *, template_type: str = "board_summary") -> b
         meta = _get_metadata(key)
     except FileNotFoundError:
         return False
-    return bool(
-        meta.get("type") == template_type
-        and meta.get("user_selectable")
-    )
+    return bool(meta.get("type") == template_type and meta.get("user_selectable"))
 
 
 __all__ = [

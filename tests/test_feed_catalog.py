@@ -4,7 +4,7 @@ Mirrors the style of ``tests/test_rsshub.py``: pure-function tests, no network,
 no mocks. Covers topic matching (CN/EN, multi-topic, dedup, misses), defensive
 input handling, and catalog data integrity.
 """
-from app.services import feed_catalog
+
 from app.services.feed_catalog import CATALOG, catalog_candidate_urls, list_topics
 
 
@@ -60,10 +60,12 @@ class TestCatalogCandidateUrls:
     def test_all_text_fields_combined(self):
         """intent + name + search_terms 拼接后一起参与匹配。"""
         # 单独任一字段都不够长,但合起来命中
-        urls = catalog_candidate_urls({
-            "name": "极客",
-            "search_terms": ["open source"],
-        })
+        urls = catalog_candidate_urls(
+            {
+                "name": "极客",
+                "search_terms": ["open source"],
+            }
+        )
         assert len(urls) > 0
         assert "https://github.blog/feed/" in urls
 
@@ -112,37 +114,29 @@ class TestCatalogDataIntegrity:
         """所有 feed URL 必须是 http/https 开头。"""
         for topic_key, topic in CATALOG.items():
             for url in topic["feeds"]:
-                assert url.startswith(("http://", "https://")), (
-                    f"topic '{topic_key}' has non-http feed: {url}"
-                )
+                assert url.startswith(("http://", "https://")), f"topic '{topic_key}' has non-http feed: {url}"
 
     def test_every_feed_url_is_unique_globally(self):
         """同一 URL 不应在不同位置出现重复(虽然跨主题共享是允许的,
         但同一主题内部不应有重复)。"""
         for topic_key, topic in CATALOG.items():
             feeds = topic["feeds"]
-            assert len(feeds) == len(set(feeds)), (
-                f"topic '{topic_key}' has duplicate feed URLs"
-            )
+            assert len(feeds) == len(set(feeds)), f"topic '{topic_key}' has duplicate feed URLs"
 
     def test_every_topic_has_keywords_and_feeds(self):
         """每个主题必须有 label + 非空 keywords + 非空 feeds。"""
         for topic_key, topic in CATALOG.items():
             assert topic.get("label"), f"topic '{topic_key}' missing label"
-            assert isinstance(topic.get("keywords"), list) and topic["keywords"], (
-                f"topic '{topic_key}' missing keywords"
-            )
-            assert isinstance(topic.get("feeds"), list) and topic["feeds"], (
-                f"topic '{topic_key}' missing feeds"
-            )
+            assert (
+                isinstance(topic.get("keywords"), list) and topic["keywords"]
+            ), f"topic '{topic_key}' missing keywords"
+            assert isinstance(topic.get("feeds"), list) and topic["feeds"], f"topic '{topic_key}' missing feeds"
 
     def test_no_empty_keywords(self):
         """keywords 中不应有空字符串或纯空白。"""
         for topic_key, topic in CATALOG.items():
             for kw in topic["keywords"]:
-                assert kw and kw.strip(), (
-                    f"topic '{topic_key}' has empty keyword"
-                )
+                assert kw and kw.strip(), f"topic '{topic_key}' has empty keyword"
 
     def test_keyword_normalisation(self):
         """文档约定 keywords 为小写匹配词。允许中文(大小写不敏感由
@@ -151,9 +145,7 @@ class TestCatalogDataIntegrity:
             for kw in topic["keywords"]:
                 # 英文 keyword 应小写;含中文的跳过
                 if kw.isascii():
-                    assert kw == kw.lower(), (
-                        f"topic '{topic_key}' english keyword not lowercase: {kw!r}"
-                    )
+                    assert kw == kw.lower(), f"topic '{topic_key}' english keyword not lowercase: {kw!r}"
 
 
 class TestListTopics:

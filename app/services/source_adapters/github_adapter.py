@@ -4,8 +4,9 @@ GitHub source adapter.
 Reads ``board.source_config`` for GitHub-specific settings (users, repos),
 fetches via the GitHub scraper, and hands off to the LLM editor.
 """
+
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +43,7 @@ class GitHubAdapter(SourceAdapter):
             "repos": config.get("repos", []),
         }
 
-        since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        since = datetime.now(UTC) - timedelta(hours=since_hours)
 
         client = get_http_client()
         scraper = GitHubScraper(scraper_config, client)

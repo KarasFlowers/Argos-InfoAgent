@@ -50,12 +50,14 @@ class TestListRoutes:
 class TestBaseUrl:
     def test_strips_trailing_slash(self):
         from types import SimpleNamespace
+
         fake_settings = SimpleNamespace(RSSHUB_BASE_URL="https://rsshub.app/")
         with patch("app.services.rsshub.settings", fake_settings, create=True):
             assert rsshub._base_url() == "https://rsshub.app"
 
     def test_falls_back_to_default_when_unset(self):
         from types import SimpleNamespace
+
         fake_settings = SimpleNamespace(RSSHUB_BASE_URL=None)
         with patch("app.services.rsshub.settings", fake_settings, create=True):
             assert rsshub._base_url() == rsshub.DEFAULT_BASE_URL

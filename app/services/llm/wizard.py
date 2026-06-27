@@ -1,4 +1,5 @@
 """Board Wizard and interest extraction."""
+
 import json
 import logging
 
@@ -18,7 +19,6 @@ class WizardMixin:
     ) -> dict:
         """
         Interactive conversational wizard that helps a user configure a new content board.
-        
         Takes a conversation history (list of {role, content} dicts) and returns:
         {
           "reply": str,           # Natural-language reply to show the user
@@ -52,14 +52,15 @@ class WizardMixin:
             if source_validation:
                 ctx_parts.append(f"各源检测结果：{json.dumps(source_validation, ensure_ascii=False)}")
             if ctx_parts:
-                full_messages.append({
-                    "role": "system",
-                    "content": (
-                        "[上下文] 用户正在基于已有配置进行调整，请在该配置基础上修改，"
-                        "保留可用的源、替换或移除失效的源，不要从零重建。\n"
-                        + "\n".join(ctx_parts)
-                    ),
-                })
+                full_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "[上下文] 用户正在基于已有配置进行调整，请在该配置基础上修改，"
+                            "保留可用的源、替换或移除失效的源，不要从零重建。\n" + "\n".join(ctx_parts)
+                        ),
+                    }
+                )
 
         for m in messages:
             role = m.get("role", "user")
@@ -90,8 +91,12 @@ class WizardMixin:
                     "slug": str(config.get("slug", "")).strip(),
                     "name": str(config.get("name", "")).strip(),
                     "icon": str(config.get("icon", "")).strip() or "📌",
-                    "source_type": config.get("source_type") if config.get("source_type") in ("rss", "pure_llm", "hackernews", "reddit", "github", "multi") else "rss",
-                    "source_config": config.get("source_config") if isinstance(config.get("source_config"), dict) else {},
+                    "source_type": config.get("source_type")
+                    if config.get("source_type") in ("rss", "pure_llm", "hackernews", "reddit", "github", "multi")
+                    else "rss",
+                    "source_config": config.get("source_config")
+                    if isinstance(config.get("source_config"), dict)
+                    else {},
                     "rss_urls": [u for u in (config.get("rss_urls") or []) if isinstance(u, str) and u.strip()],
                     "system_prompt": str(config.get("system_prompt", "")).strip(),
                 }
@@ -131,10 +136,12 @@ class WizardMixin:
             if context.get("source_validation"):
                 ctx_parts.append(f"各源检测结果：{json.dumps(context['source_validation'], ensure_ascii=False)}")
             if ctx_parts:
-                full_messages.append({
-                    "role": "system",
-                    "content": "[上下文] 用户在已有配置基础上调整：\n" + "\n".join(ctx_parts),
-                })
+                full_messages.append(
+                    {
+                        "role": "system",
+                        "content": "[上下文] 用户在已有配置基础上调整：\n" + "\n".join(ctx_parts),
+                    }
+                )
         for m in messages:
             role = m.get("role", "user")
             if role in ("user", "assistant"):
@@ -174,10 +181,7 @@ class WizardMixin:
         valid_types = ("rss", "pure_llm", "hackernews", "reddit", "github", "multi")
         st = parsed.get("source_type")
         cand = parsed.get("candidates") if isinstance(parsed.get("candidates"), dict) else {}
-        rsshub_entries = [
-            e for e in (cand.get("rsshub") or [])
-            if isinstance(e, dict) and e.get("platform")
-        ]
+        rsshub_entries = [e for e in (cand.get("rsshub") or []) if isinstance(e, dict) and e.get("platform")]
         return {
             "ready": bool(parsed.get("ready", False)),
             "clarify": str(parsed.get("clarify", "")).strip(),
@@ -251,14 +255,15 @@ class WizardMixin:
                 "slug": str(config.get("slug", "") or plan.get("slug", "")).strip(),
                 "name": str(config.get("name", "") or plan.get("name", "")).strip(),
                 "icon": str(config.get("icon", "") or plan.get("icon", "")).strip() or "📌",
-                "source_type": config.get("source_type") if config.get("source_type") in valid_types else plan.get("source_type", "rss"),
+                "source_type": config.get("source_type")
+                if config.get("source_type") in valid_types
+                else plan.get("source_type", "rss"),
                 "source_config": config.get("source_config") if isinstance(config.get("source_config"), dict) else {},
                 "system_prompt": str(config.get("system_prompt", "")).strip(),
             }
             if not config["slug"] or not config["name"]:
                 config = None
         return {"reply": reply, "config": config}
-
 
     async def suggest_alternative_feeds(
         self,
@@ -307,9 +312,7 @@ class WizardMixin:
                     continue
                 original = str(item.get("original", "")).strip()
                 suggestions = [
-                    str(u).strip()
-                    for u in (item.get("suggestions") or [])
-                    if isinstance(u, str) and u.strip()
+                    str(u).strip() for u in (item.get("suggestions") or []) if isinstance(u, str) and u.strip()
                 ]
                 if original:
                     result.append({"original": original, "suggestions": suggestions[:3]})
@@ -322,7 +325,6 @@ class WizardMixin:
         except Exception as error:
             logger.warning("suggest_alternative_feeds failed: %s", error)
             return [{"original": u, "suggestions": []} for u in broken_urls]
-
 
     async def extract_interest_options(
         self,
@@ -354,11 +356,7 @@ class WizardMixin:
             '5. 输出 JSON：{"options": ["...", "...", "..."]} ，不要额外文本。\n'
         )
 
-        user_content = (
-            f"标题：{headline}\n"
-            f"要点：\n{kp_text or '(无)'}\n"
-            f"标签：{tags_text or '(无)'}"
-        )
+        user_content = f"标题：{headline}\n" f"要点：\n{kp_text or '(无)'}\n" f"标签：{tags_text or '(无)'}"
 
         try:
             response = await self.llm.chat(

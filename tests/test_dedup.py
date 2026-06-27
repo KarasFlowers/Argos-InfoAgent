@@ -7,12 +7,12 @@ AI semantic dedup is NOT tested here (requires LLM), only the deterministic help
 import pytest
 
 from app.models.schemas import ContentItem
-from app.services.dedup_service import normalize_url, merge_cross_source_duplicates
-
+from app.services.dedup_service import merge_cross_source_duplicates, normalize_url
 
 # ---------------------------------------------------------------------------
 # URL normalisation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "raw, expected",
@@ -31,6 +31,7 @@ def test_normalize_url(raw, expected):
 # ---------------------------------------------------------------------------
 # Cross-source merge
 # ---------------------------------------------------------------------------
+
 
 def _make_item(
     source_type: str,
@@ -53,8 +54,11 @@ def _make_item(
 def test_merge_removes_url_duplicates():
     """Two items pointing to the same URL should be merged into one."""
     a = _make_item("rss", "https://example.com/article", content="short")
-    b = _make_item("hackernews", "https://www.example.com/article/",
-                    content="longer body with HN comments\n--- Top Comments ---\nGreat!")
+    b = _make_item(
+        "hackernews",
+        "https://www.example.com/article/",
+        content="longer body with HN comments\n--- Top Comments ---\nGreat!",
+    )
 
     merged = merge_cross_source_duplicates([a, b])
     assert len(merged) == 1

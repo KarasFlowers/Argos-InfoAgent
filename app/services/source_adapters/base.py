@@ -1,6 +1,7 @@
 """
 Base class for board source adapters.
 """
+
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 

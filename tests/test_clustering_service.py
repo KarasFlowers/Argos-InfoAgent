@@ -1,9 +1,10 @@
 """Tests for event clustering service."""
 
 import pytest
+
 from app.services.clustering_service import (
-    _fingerprint,
     _find_best_cluster_overlap,
+    _fingerprint,
 )
 
 

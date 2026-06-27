@@ -18,14 +18,14 @@ from app.core.url_safety import validate_public_url
 from app.services.chat_history_service import get_chat_history
 from app.services.learning_service import record_feedback
 from app.services.rag_service import (
-    is_rag_available,
     _ingested_urls,
     _prepare_overview_context,
-    get_ingest_status,
     get_db_cached_overview,
+    get_ingest_status,
     ingest,
-    query_stream,
+    is_rag_available,
     query_cross_article,
+    query_stream,
     stream_article_overview,
 )
 
@@ -44,13 +44,9 @@ def _require_rag_enabled():
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
 
-
 def _format_sse_data(message: str) -> str:
     normalized = message.replace("\r\n", "\n").replace("\r", "\n")
-    return "".join(
-        f"data: {line}\n" if line else "data:\n"
-        for line in normalized.split("\n")
-    ) + "\n"
+    return "".join(f"data: {line}\n" if line else "data:\n" for line in normalized.split("\n")) + "\n"
 
 
 def _validate_public_url(value: AnyHttpUrl) -> AnyHttpUrl:
@@ -72,7 +68,9 @@ class IngestRequest(PublicUrlRequest):
 
 class QueryRequest(PublicUrlRequest):
     question: str = Field(min_length=1)
-    history: list[dict] | None = Field(default=None, description="Optional chat history [{role,content}] to avoid DB round-trip")
+    history: list[dict] | None = Field(
+        default=None, description="Optional chat history [{role,content}] to avoid DB round-trip"
+    )
 
 
 class FeedbackRequest(PublicUrlRequest):
@@ -92,8 +90,10 @@ async def rag_enabled_status():
         "enabled": settings.RAG_ENABLED,
         "available": available,
         "message": (
-            "RAG is ready." if available
-            else "RAG is disabled." if not settings.RAG_ENABLED
+            "RAG is ready."
+            if available
+            else "RAG is disabled."
+            if not settings.RAG_ENABLED
             else "RAG dependencies not installed. Run: pip install -r requirements-rag.txt"
         ),
     }
@@ -119,6 +119,7 @@ async def ingest_article(req: IngestRequest):
     * If background status is 'failed' or unknown → synchronous ingest.
     """
     import asyncio
+
     url = str(req.url)
 
     # Fast path: already indexed
@@ -129,7 +130,7 @@ async def ingest_article(req: IngestRequest):
 
     # Wait for background worker if it's in progress
     if bg and bg["status"] in ("pending", "running"):
-        for _ in range(60):          # ~30 seconds max
+        for _ in range(60):  # ~30 seconds max
             await asyncio.sleep(0.5)
             bg = get_ingest_status(url)
             if bg and bg["status"] == "done":
@@ -151,11 +152,11 @@ async def ingest_article(req: IngestRequest):
     except ValueError as exc:
         detail = str(exc)
         if "private network" in detail or "blocklist" in detail:
-            raise HTTPException(status_code=422, detail=f"安全预检失败：{detail}")
-        raise HTTPException(status_code=422, detail=f"内容提取失败：{detail}")
-    except Exception:
+            raise HTTPException(status_code=422, detail=f"安全预检失败：{detail}") from exc
+        raise HTTPException(status_code=422, detail=f"内容提取失败：{detail}") from exc
+    except Exception as exc:
         logger.exception("Failed to ingest article: %s", url)
-        raise HTTPException(status_code=500, detail="Failed to ingest article.")
+        raise HTTPException(status_code=500, detail="Failed to ingest article.") from exc
 
 
 @rag_router.post("/overview", dependencies=[Depends(_require_rag_enabled)])
@@ -166,9 +167,11 @@ async def fetch_article_overview(req: PublicUrlRequest):
     # --- FAST PATH: DB cached overview (instant return) ---
     cached_overview = await get_db_cached_overview(url)
     if cached_overview:
+
         async def cached_event_generator():
             yield _format_sse_data(cached_overview)
             yield _format_sse_data("[DONE]")
+
         return StreamingResponse(
             cached_event_generator(),
             media_type="text/event-stream",
@@ -197,11 +200,11 @@ async def fetch_article_overview(req: PublicUrlRequest):
     except ValueError as exc:
         detail = str(exc)
         if "private network" in detail or "blocklist" in detail:
-            raise HTTPException(status_code=422, detail=f"安全预检失败：{detail}")
-        raise HTTPException(status_code=422, detail=f"概要提取失败：{detail}")
-    except Exception:
+            raise HTTPException(status_code=422, detail=f"安全预检失败：{detail}") from exc
+        raise HTTPException(status_code=422, detail=f"概要提取失败：{detail}") from exc
+    except Exception as exc:
         logger.exception("Failed to generate article overview for %s", url)
-        raise HTTPException(status_code=500, detail="Failed to generate article overview.")
+        raise HTTPException(status_code=500, detail="Failed to generate article overview.") from exc
 
 
 @rag_router.post("/query", dependencies=[Depends(_require_rag_enabled)])
@@ -253,10 +256,10 @@ async def fetch_chat_history(url: AnyHttpUrl = Query(...)):
             ],
         }
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except Exception:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
         logger.exception("Failed to fetch chat history for %s", url)
-        raise HTTPException(status_code=500, detail="Failed to fetch chat history.")
+        raise HTTPException(status_code=500, detail="Failed to fetch chat history.") from exc
 
 
 @rag_router.post("/feedback", dependencies=[Depends(_require_rag_enabled)])
@@ -271,10 +274,10 @@ async def submit_feedback(req: FeedbackRequest):
         await record_feedback(url, req.sentiment)
         return {"status": "ok", "message": "Feedback recorded successfully."}
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except Exception:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
         logger.exception("Failed to record feedback for %s", url)
-        raise HTTPException(status_code=500, detail="Failed to record feedback.")
+        raise HTTPException(status_code=500, detail="Failed to record feedback.") from exc
 
 
 @rag_router.post("/query/global", dependencies=[Depends(_require_rag_enabled)])
@@ -283,6 +286,7 @@ async def query_global(req: GlobalQueryRequest):
     Cross-article RAG query: search all ingested articles and stream an answer.
     Returns an SSE stream of text tokens with multi-source citations.
     """
+
     async def event_generator():
         async for token in query_cross_article(
             req.question,

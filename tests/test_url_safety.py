@@ -8,15 +8,17 @@ Tests:
   - Edge cases (IPv6, reserved ranges)
 """
 
-import pytest
-
-from app.core.url_safety import validate_public_url, _is_disallowed_ip, _get_host
 import ipaddress
 
+import httpx
+import pytest
+
+from app.core.url_safety import _get_host, _is_disallowed_ip, get_public_url, validate_public_url
 
 # ---------------------------------------------------------------------------
 # _get_host
 # ---------------------------------------------------------------------------
+
 
 class TestGetHost:
     def test_https_url(self):
@@ -28,6 +30,9 @@ class TestGetHost:
     def test_www_prefix(self):
         assert _get_host("https://www.example.com") == "www.example.com"
 
+    def test_trailing_dot_is_normalized(self):
+        assert _get_host("https://Example.COM./path") == "example.com"
+
     def test_ip_address(self):
         assert _get_host("http://1.2.3.4") == "1.2.3.4"
 
@@ -38,6 +43,7 @@ class TestGetHost:
 # ---------------------------------------------------------------------------
 # _is_disallowed_ip
 # ---------------------------------------------------------------------------
+
 
 class TestIsDisallowedIp:
     def test_loopback_ipv4(self):
@@ -80,6 +86,7 @@ class TestIsDisallowedIp:
 # validate_public_url
 # ---------------------------------------------------------------------------
 
+
 class TestValidatePublicUrl:
     def test_valid_public_url(self):
         result = validate_public_url("https://example.com")
@@ -97,9 +104,17 @@ class TestValidatePublicUrl:
         with pytest.raises(ValueError, match="blocklist"):
             validate_public_url("http://localhost:8080")
 
+    def test_trailing_dot_localhost_blocked(self):
+        with pytest.raises(ValueError, match="blocklist"):
+            validate_public_url("http://localhost./admin")
+
     def test_dot_local_blocked(self):
         with pytest.raises(ValueError, match="blocklist"):
             validate_public_url("http://myserver.local")
+
+    def test_trailing_dot_local_domain_blocked(self):
+        with pytest.raises(ValueError, match="blocklist"):
+            validate_public_url("http://myserver.local./feed")
 
     def test_private_ip_blocked(self):
         with pytest.raises(ValueError, match="private"):
@@ -109,6 +124,31 @@ class TestValidatePublicUrl:
         with pytest.raises(ValueError, match="private"):
             validate_public_url("http://127.0.0.1")
 
+    def test_trailing_dot_loopback_ip_blocked(self):
+        with pytest.raises(ValueError, match="private"):
+            validate_public_url("http://127.0.0.1./feed")
+
     def test_empty_host_blocked(self):
         with pytest.raises(ValueError, match="valid public URL"):
             validate_public_url("http://")
+
+
+class TestGetPublicUrl:
+    @pytest.mark.anyio
+    async def test_redirect_to_private_host_is_blocked_before_following(self):
+        calls: list[str] = []
+
+        class RedirectClient:
+            async def get(self, url: str, *, timeout: float, follow_redirects: bool):
+                calls.append(url)
+                assert follow_redirects is False
+                return httpx.Response(
+                    status_code=302,
+                    headers={"location": "http://localhost/admin"},
+                    request=httpx.Request("GET", url),
+                )
+
+        with pytest.raises(ValueError, match="blocklist"):
+            await get_public_url(RedirectClient(), "http://93.184.216.34/feed", timeout=1.0)
+
+        assert calls == ["http://93.184.216.34/feed"]

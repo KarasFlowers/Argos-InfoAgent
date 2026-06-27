@@ -19,6 +19,7 @@ over the concatenated plan text (intent + name + search_terms). At this data
 scale (~60 feeds across 8 topics) there is no need for a search index; the
 plain scan is O(topics × keywords) per call and trivially debuggable.
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,8 +43,19 @@ CATALOG: dict[str, dict] = {
     "ai_ml": {
         "label": "AI / 机器学习",
         "keywords": [
-            "ai", "ml", "人工智能", "机器学习", "大模型", "llm", "深度学习",
-            "neural", "gpt", "transformer", "chatgpt", "diffusion", "rag",
+            "ai",
+            "ml",
+            "人工智能",
+            "机器学习",
+            "大模型",
+            "llm",
+            "深度学习",
+            "neural",
+            "gpt",
+            "transformer",
+            "chatgpt",
+            "diffusion",
+            "rag",
         ],
         "feeds": [
             "https://hnrss.org/frontpage",
@@ -56,8 +68,16 @@ CATALOG: dict[str, dict] = {
     "programming": {
         "label": "编程 / 软件开发",
         "keywords": [
-            "编程", "开发", "coding", "软件工程", "programming", "程序员",
-            "代码", "算法", "developer", "software engineering",
+            "编程",
+            "开发",
+            "coding",
+            "软件工程",
+            "programming",
+            "程序员",
+            "代码",
+            "算法",
+            "developer",
+            "software engineering",
         ],
         "feeds": [
             "https://hnrss.org/frontpage",
@@ -69,8 +89,17 @@ CATALOG: dict[str, dict] = {
     "frontend": {
         "label": "前端 / Web",
         "keywords": [
-            "前端", "frontend", "web 开发", "css", "javascript", "typescript",
-            "react", "vue", "angular", "html", "web 前端",
+            "前端",
+            "frontend",
+            "web 开发",
+            "css",
+            "javascript",
+            "typescript",
+            "react",
+            "vue",
+            "angular",
+            "html",
+            "web 前端",
         ],
         "feeds": [
             "https://hnrss.org/frontpage",
@@ -82,8 +111,19 @@ CATALOG: dict[str, dict] = {
     "backend_infra": {
         "label": "后端 / 基础设施",
         "keywords": [
-            "后端", "backend", "基础设施", "infra", "devops", "云", "cloud",
-            "server", "kubernetes", "docker", "微服务", "microservice", "数据库",
+            "后端",
+            "backend",
+            "基础设施",
+            "infra",
+            "devops",
+            "云",
+            "cloud",
+            "server",
+            "kubernetes",
+            "docker",
+            "微服务",
+            "microservice",
+            "数据库",
         ],
         "feeds": [
             "https://hnrss.org/frontpage",
@@ -94,8 +134,18 @@ CATALOG: dict[str, dict] = {
     "security": {
         "label": "网络安全",
         "keywords": [
-            "安全", "security", "网络安全", "cve", "漏洞", "vulnerability",
-            "cyber", "渗透", "penetration", "加密", "crypto", "zero-day",
+            "安全",
+            "security",
+            "网络安全",
+            "cve",
+            "漏洞",
+            "vulnerability",
+            "cyber",
+            "渗透",
+            "penetration",
+            "加密",
+            "crypto",
+            "zero-day",
         ],
         "feeds": [
             "https://feeds.feedburner.com/TheHackersNews",
@@ -106,8 +156,14 @@ CATALOG: dict[str, dict] = {
     "open_source": {
         "label": "开源",
         "keywords": [
-            "开源", "open source", "github", "foss", "自由软件", "linux",
-            "gnu", "mozilla",
+            "开源",
+            "open source",
+            "github",
+            "foss",
+            "自由软件",
+            "linux",
+            "gnu",
+            "mozilla",
         ],
         "feeds": [
             "https://hnrss.org/frontpage",
@@ -118,8 +174,15 @@ CATALOG: dict[str, dict] = {
     "tech_general": {
         "label": "综合科技资讯",
         "keywords": [
-            "科技", "tech", "technology", "资讯", "新闻", "综合", "互联网",
-            "数码", "industry",
+            "科技",
+            "tech",
+            "technology",
+            "资讯",
+            "新闻",
+            "综合",
+            "互联网",
+            "数码",
+            "industry",
         ],
         "feeds": [
             "https://sspai.com/feed",
@@ -131,8 +194,17 @@ CATALOG: dict[str, dict] = {
     "mobile": {
         "label": "移动开发",
         "keywords": [
-            "移动", "mobile", "ios", "android", "flutter", "swift", "kotlin",
-            "app 开发", "react native", "iphone", "ipad",
+            "移动",
+            "mobile",
+            "ios",
+            "android",
+            "flutter",
+            "swift",
+            "kotlin",
+            "app 开发",
+            "react native",
+            "iphone",
+            "ipad",
         ],
         "feeds": [
             "https://hnrss.org/frontpage",
@@ -146,6 +218,7 @@ CATALOG: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # Matching
 # ---------------------------------------------------------------------------
+
 
 def _normalise_plan_text(plan: dict) -> str:
     """Build a single lowercase haystack from the plan's text fields.
@@ -201,7 +274,8 @@ def catalog_candidate_urls(plan: dict) -> list[str]:
     if matched_topics:
         logger.debug(
             "feed_catalog: matched topics %s → %d candidate feeds",
-            matched_topics, len(urls),
+            matched_topics,
+            len(urls),
         )
     return urls
 

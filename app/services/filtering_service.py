@@ -15,8 +15,6 @@ from __future__ import annotations
 import logging
 import re
 from urllib.parse import urlsplit
-from datetime import datetime, UTC
-from typing import Optional
 
 from app.models.schemas import ContentItem
 
@@ -56,6 +54,7 @@ _LOW_QUALITY_DOMAIN_PATTERNS = {
     "twitter.com",
 }
 
+
 class FilteringResult:
     """Result of applying rule-based filters to a list of ContentItems."""
 
@@ -90,6 +89,7 @@ async def apply_rule_filters(
     if session:
         try:
             from sqlalchemy import select
+
             from app.models.domain import BlacklistKeyword
 
             stmt = select(BlacklistKeyword).where(BlacklistKeyword.is_active == True)  # noqa: E712
@@ -132,7 +132,9 @@ async def apply_rule_filters(
     if filtered:
         logger.info(
             "Rule filter: %d/%d items filtered (%d passed)",
-            len(filtered), len(items), len(passed),
+            len(filtered),
+            len(items),
+            len(passed),
         )
 
     return FilteringResult(passed=passed, filtered=filtered)
@@ -174,7 +176,7 @@ def _check_low_signal(item: ContentItem) -> str | None:
     # Marketing pattern in title
     for pattern in _DEFAULT_MARKETING_PATTERNS:
         if pattern.search(item.title):
-            return f"low_signal:marketing_pattern"
+            return "low_signal:marketing_pattern"
 
     # Content too thin (RSS excerpt + full_text combined)
     content_length = len((item.content or "").strip())
@@ -196,4 +198,3 @@ def _check_low_quality_domain(item: ContentItem) -> str | None:
         if host == domain or host.endswith(f".{domain}"):
             return f"low_quality_domain:{domain}"
     return None
-

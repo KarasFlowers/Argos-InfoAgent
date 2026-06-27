@@ -19,13 +19,11 @@ SQLite file and concurrent writes will cause ``database is locked``
 errors or data corruption.  Stop the web server first, or switch to
 PostgreSQL for production use.
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
-import sys
 from datetime import datetime
-from typing import Optional
 
 from fastmcp import FastMCP
 
@@ -33,14 +31,15 @@ from fastmcp import FastMCP
 # Startup guard: warn if FastAPI web server is already running
 # ---------------------------------------------------------------------------
 
+
 def _check_web_server_running() -> None:
     """Detect whether the Argos FastAPI server is already listening on port 8000.
 
     If it is, print a warning because both processes share the same SQLite
     database and concurrent writes are unsafe.
     """
-    import socket
     import logging
+    import socket
 
     host = "127.0.0.1"
     port = 8000
@@ -52,7 +51,8 @@ def _check_web_server_running() -> None:
             "Running MCP Server alongside the web server with SQLite may cause "
             "'database is locked' errors or data corruption. "
             "Please stop the web server first, or switch to PostgreSQL.",
-            host, port,
+            host,
+            port,
         )
     except (ConnectionRefusedError, OSError, TimeoutError):
         pass  # port not open → safe to proceed
@@ -85,12 +85,14 @@ async def _ensure_db():
     global _db_ready
     if not _db_ready:
         from app.core.db import init_db
+
         await init_db()
         _db_ready = True
 
 
 async def _get_session():
     from app.core.db import AsyncSessionLocal
+
     return AsyncSessionLocal()
 
 
@@ -98,10 +100,11 @@ async def _get_session():
 # Tools: Daily Briefing
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 async def get_daily_summary(
     board_slug: str = "tech",
-    date: Optional[str] = None,
+    date: str | None = None,
 ) -> str:
     """Get the daily briefing for a specific board.
 
@@ -129,9 +132,7 @@ async def get_daily_summary(
                 ensure_ascii=False,
             )
 
-        summary = await db_service.get_summary_by_date(
-            session, search_date, board_id=board.id
-        )
+        summary = await db_service.get_summary_by_date(session, search_date, board_id=board.id)
         if not summary:
             return json.dumps(
                 {"error": f"No summary found for board '{board_slug}' on {search_date}."},
@@ -140,22 +141,28 @@ async def get_daily_summary(
 
         items = []
         for item in summary.top_news:
-            items.append({
-                "headline": item.headline,
-                "category": item.category,
-                "key_points": item.key_points,
-                "tags": item.tags,
-                "link": item.original_link,
-                "source": item.source,
-            })
+            items.append(
+                {
+                    "headline": item.headline,
+                    "category": item.category,
+                    "key_points": item.key_points,
+                    "tags": item.tags,
+                    "link": item.original_link,
+                    "source": item.source,
+                }
+            )
 
-        return json.dumps({
-            "board": board_slug,
-            "date": summary.date,
-            "overview": summary.overview,
-            "items_count": len(items),
-            "top_news": items,
-        }, ensure_ascii=False, indent=2)
+        return json.dumps(
+            {
+                "board": board_slug,
+                "date": summary.date,
+                "overview": summary.overview,
+                "items_count": len(items),
+                "top_news": items,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 @mcp.tool()
@@ -171,7 +178,7 @@ async def generate_summary(board_slug: str = "tech") -> str:
     await _ensure_db()
     from app.core.db import AsyncSessionLocal
     from app.services.db_service import db_service
-    from app.services.source_adapters import get_adapter, UnknownSourceTypeError
+    from app.services.source_adapters import UnknownSourceTypeError, get_adapter
 
     search_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -184,10 +191,13 @@ async def generate_summary(board_slug: str = "tech") -> str:
         # Check if already exists
         existing = await db_service.get_summary_by_date(session, search_date, board_id=board.id)
         if existing:
-            return json.dumps({
-                "status": "already_exists",
-                "message": f"Summary for '{board_slug}' on {search_date} already exists.",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "status": "already_exists",
+                    "message": f"Summary for '{board_slug}' on {search_date} already exists.",
+                },
+                ensure_ascii=False,
+            )
 
         try:
             adapter = get_adapter(board.source_type)
@@ -197,12 +207,16 @@ async def generate_summary(board_slug: str = "tech") -> str:
         summary, _ = await adapter.produce(board=board, session=session)
         if summary:
             await db_service.save_summary(session, summary, board_id=board.id)
-            return json.dumps({
-                "status": "generated",
-                "date": summary.date,
-                "overview": summary.overview,
-                "items_count": len(summary.top_news),
-            }, ensure_ascii=False, indent=2)
+            return json.dumps(
+                {
+                    "status": "generated",
+                    "date": summary.date,
+                    "overview": summary.overview,
+                    "items_count": len(summary.top_news),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
         else:
             return json.dumps({"error": "Failed to generate summary."}, ensure_ascii=False)
 
@@ -211,8 +225,9 @@ async def generate_summary(board_slug: str = "tech") -> str:
 # Tools: RAG Q&A
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
-async def ask_article(question: str, article_url: Optional[str] = None, history: Optional[list[dict]] = None) -> str:
+async def ask_article(question: str, article_url: str | None = None, history: list[dict] | None = None) -> str:
     """Ask a question about a previously ingested article using RAG.
 
     If article_url is provided, the question is scoped to that article.
@@ -280,6 +295,7 @@ async def ask_global(question: str, max_results: int = 5) -> str:
 # Tools: Board Management
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 async def list_boards() -> str:
     """List all content boards with their configuration.
@@ -295,15 +311,17 @@ async def list_boards() -> str:
         boards = await db_service.list_boards(session, active_only=False)
         result = []
         for b in boards:
-            result.append({
-                "slug": b.slug,
-                "name": b.name,
-                "icon": b.icon,
-                "source_type": b.source_type,
-                "is_active": b.is_active,
-                "schedule": b.schedule or "(global)",
-                "description": b.description,
-            })
+            result.append(
+                {
+                    "slug": b.slug,
+                    "name": b.name,
+                    "icon": b.icon,
+                    "source_type": b.source_type,
+                    "is_active": b.is_active,
+                    "schedule": b.schedule or "(global)",
+                    "description": b.description,
+                }
+            )
         return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -311,10 +329,11 @@ async def list_boards() -> str:
 # Tools: News Search
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 async def search_news(
     keyword: str,
-    board_slug: Optional[str] = None,
+    board_slug: str | None = None,
     limit: int = 10,
 ) -> str:
     """Search past news items by keyword in headlines.
@@ -328,19 +347,15 @@ async def search_news(
         JSON array of matching news items.
     """
     await _ensure_db()
-    from app.core.db import AsyncSessionLocal
     from sqlmodel import select
-    from app.models.domain import NewsItem, DailySummary, Board
+
+    from app.core.db import AsyncSessionLocal
+    from app.models.domain import Board, DailySummary, NewsItem
 
     limit = min(limit, 50)
 
     async with AsyncSessionLocal() as session:
-        stmt = (
-            select(NewsItem)
-            .where(NewsItem.headline.contains(keyword))
-            .order_by(NewsItem.id.desc())
-            .limit(limit)
-        )
+        stmt = select(NewsItem).where(NewsItem.headline.contains(keyword)).order_by(NewsItem.id.desc()).limit(limit)
 
         if board_slug:
             stmt = (
@@ -358,24 +373,31 @@ async def search_news(
 
         output = []
         for item in items:
-            output.append({
-                "headline": item.headline,
-                "category": item.category,
-                "tags": item.tags,
-                "link": item.original_link,
-                "source": item.source,
-            })
+            output.append(
+                {
+                    "headline": item.headline,
+                    "category": item.category,
+                    "tags": item.tags,
+                    "link": item.original_link,
+                    "source": item.source,
+                }
+            )
 
-        return json.dumps({
-            "query": keyword,
-            "count": len(output),
-            "results": output,
-        }, ensure_ascii=False, indent=2)
+        return json.dumps(
+            {
+                "query": keyword,
+                "count": len(output),
+                "results": output,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 # ---------------------------------------------------------------------------
 # Tools: Feedback / Personalization
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 async def add_feedback(article_url: str, sentiment: str) -> str:
@@ -399,15 +421,18 @@ async def add_feedback(article_url: str, sentiment: str) -> str:
 
     async with AsyncSessionLocal() as session:
         await db_service.save_feedback(session, article_url, sentiment_val)
-        return json.dumps({
-            "status": "saved",
-            "article_url": article_url,
-            "sentiment": sentiment,
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "saved",
+                "article_url": article_url,
+                "sentiment": sentiment,
+            },
+            ensure_ascii=False,
+        )
 
 
 @mcp.tool()
-async def get_user_interests(board_slug: Optional[str] = None) -> str:
+async def get_user_interests(board_slug: str | None = None) -> str:
     """Get the current user persona/interests that guide content personalization.
 
     Args:
@@ -431,18 +456,21 @@ async def get_user_interests(board_slug: Optional[str] = None) -> str:
         personas = await db_service.get_active_personas(session, board_id=board_id)
         result = []
         for p in personas:
-            result.append({
-                "id": p.id,
-                "content": p.content,
-                "category": p.category,
-                "is_active": p.is_active,
-            })
+            result.append(
+                {
+                    "id": p.id,
+                    "content": p.content,
+                    "category": p.category,
+                    "is_active": p.is_active,
+                }
+            )
         return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------
 # Tools: System
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 async def get_system_status() -> str:
@@ -459,21 +487,26 @@ async def get_system_status() -> str:
     async with AsyncSessionLocal() as session:
         boards = await db_service.list_boards(session, active_only=False)
 
-    return json.dumps({
-        "project": settings.PROJECT_NAME,
-        "version": settings.VERSION,
-        "llm_model": settings.LLM_MODEL,
-        "llm_base_url": settings.effective_llm_base_url,
-        "boards_count": len(boards),
-        "active_boards": sum(1 for b in boards if b.is_active),
-        "rag_hyde_enabled": settings.RAG_HYDE_ENABLED,
-        "notify_channels": settings.NOTIFY_CHANNELS,
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(
+        {
+            "project": settings.PROJECT_NAME,
+            "version": settings.VERSION,
+            "llm_model": settings.LLM_MODEL,
+            "llm_base_url": settings.effective_llm_base_url,
+            "boards_count": len(boards),
+            "active_boards": sum(1 for b in boards if b.is_active),
+            "rag_hyde_enabled": settings.RAG_HYDE_ENABLED,
+            "notify_channels": settings.NOTIFY_CHANNELS,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Tools: Research
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 async def deep_research(question: str, max_sub_queries: int = 4) -> str:
@@ -489,6 +522,7 @@ async def deep_research(question: str, max_sub_queries: int = 4) -> str:
     """
     await _ensure_db()
     from app.services.research_service import research
+
     result = await research(question=question, max_sub_queries=max_sub_queries)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -578,6 +612,7 @@ async def get_cost_breakdown(date: str = "") -> str:
         JSON with label-level token usage and call counts.
     """
     from app.services.metrics_service import metrics_service
+
     result = await metrics_service.get_cost_breakdown(date or None)
     return json.dumps(result, ensure_ascii=False, indent=2)
 

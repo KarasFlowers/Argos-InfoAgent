@@ -1,4 +1,5 @@
 """Daily summary generation (RSS-based and pure-LLM)."""
+
 import json
 import logging
 import re
@@ -24,18 +25,18 @@ def _repair_json(text: str) -> str:
     - Missing closing brackets
     """
     # Remove trailing commas before } or ]
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
     # Replace unescaped newlines inside string values with spaces
-    text = re.sub(r'(?<!\\)\n(?=[^"]*"[^"]*$)', ' ', text)
+    text = re.sub(r'(?<!\\)\n(?=[^"]*"[^"]*$)', " ", text)
     # Try to balance brackets: count opens vs closes
-    opens = text.count('{') + text.count('[')
-    closes = text.count('}') + text.count(']')
+    opens = text.count("{") + text.count("[")
+    closes = text.count("}") + text.count("]")
     while closes < opens:
         # Heuristic: add closing brackets at the end
-        if text.count('{') > text.count('}'):
-            text += '}'
-        elif text.count('[') > text.count(']'):
-            text += ']'
+        if text.count("{") > text.count("}"):
+            text += "}"
+        elif text.count("[") > text.count("]"):
+            text += "]"
         closes += 1
     return text
 
@@ -89,14 +90,16 @@ def _build_fallback_summary(
             key_points = [s.strip() for s in sentences[:3] if s.strip()]
         if not key_points:
             key_points = ["(AI 摘要不可用，仅展示原始标题)"]
-        top_news.append(SummaryItem(
-            headline=headline,
-            category=a.get("category", "general"),
-            key_points=key_points,
-            tags=[],
-            original_link=a.get("link", ""),
-            source=a.get("source", "未知来源"),
-        ))
+        top_news.append(
+            SummaryItem(
+                headline=headline,
+                category=a.get("category", "general"),
+                key_points=key_points,
+                tags=[],
+                original_link=a.get("link", ""),
+                source=a.get("source", "未知来源"),
+            )
+        )
     return DailySummaryResponse(
         date=date_str,
         overview="⚠️ AI 摘要服务暂时不可用，以下为原始文章列表（无 AI 摘要）。",
@@ -193,6 +196,7 @@ class SummaryMixin:
         _editor_prompt = _get_editor_prompt(board, custom_instructions=custom_instructions)
         schema_suffix = _daily_summary_schema()
         from app.core.llm_config import language_directive
+
         lang_directive = language_directive(getattr(board, "output_language", None) if board else None)
         system_prompt = _editor_prompt + schema_suffix + lang_directive
 
@@ -222,10 +226,14 @@ class SummaryMixin:
                         persona_lines.append(f"- {marker} {persona.content}")
                     has_extracted = any(p.category == "extracted" for p in personas)
                     diversity_note = (
-                        "\nIMPORTANT: These preferences should influence article PRIORITY (put preferred topics near the top), "
-                        "but do NOT let them dominate the entire briefing. At most 30-40% of articles should match user interests — "
-                        "the rest should cover other important news of the day for breadth."
-                    ) if has_extracted else ""
+                        (
+                            "\nIMPORTANT: These preferences should influence article PRIORITY (put preferred topics near the top), "
+                            "but do NOT let them dominate the entire briefing. At most 30-40% of articles should match user interests — "
+                            "the rest should cover other important news of the day for breadth."
+                        )
+                        if has_extracted
+                        else ""
+                    )
                     persona_context = (
                         "\n\nUSER PERSONALITY & PREFERENCE GUIDELINES:\n"
                         + "\n".join(persona_lines)
@@ -255,7 +263,8 @@ class SummaryMixin:
             content_items = interest_filter.filter_items(content_items)
             logger.info(
                 "Interest pre-filter: %d -> %d items",
-                before_filter, len(content_items),
+                before_filter,
+                len(content_items),
             )
 
         # ---- Rule-based quality filter (blacklist + low-signal heuristics) ----
@@ -265,7 +274,9 @@ class SummaryMixin:
         if filter_result.filtered_count > 0:
             logger.info(
                 "Rule filter: %d -> %d items (filtered %d)",
-                len(content_items), len(filter_result.passed), filter_result.filtered_count,
+                len(content_items),
+                len(filter_result.passed),
+                filter_result.filtered_count,
             )
             content_items = filter_result.passed
 
@@ -279,7 +290,8 @@ class SummaryMixin:
         if len(deduped_items) < len(content_items):
             logger.info(
                 "URL dedup: %d -> %d items",
-                len(content_items), len(deduped_items),
+                len(content_items),
+                len(deduped_items),
             )
 
         # Build content fallback map for RAG ingest (body + comments)
@@ -308,15 +320,14 @@ class SummaryMixin:
         # (skip for catch-up backfill — we WANT those articles)
         if session and not skip_recent_dedup:
             try:
-                recent_urls = await db_service.get_recent_article_urls(
-                    session, board_id=board_id, days=3
-                )
+                recent_urls = await db_service.get_recent_article_urls(session, board_id=board_id, days=3)
                 if recent_urls:
                     before = len(raw_articles)
                     raw_articles = [a for a in raw_articles if a["link"] not in recent_urls]
                     logger.info(
                         "Dedup: removed %d/%d articles already shown recently",
-                        before - len(raw_articles), before,
+                        before - len(raw_articles),
+                        before,
                     )
             except Exception as dedup_err:
                 logger.warning("Dedup check failed, proceeding without: %s", dedup_err)
@@ -351,14 +362,12 @@ class SummaryMixin:
             if len(deduped_ci) < len(scored_ci):
                 logger.info(
                     "AI semantic dedup: %d -> %d items",
-                    len(scored_ci), len(deduped_ci),
+                    len(scored_ci),
+                    len(deduped_ci),
                 )
                 # Map back to article dicts
                 keep_ids = {ci.id for ci in deduped_ci}
-                high_quality = [
-                    a for i, a in enumerate(high_quality)
-                    if f"tmp:{i}" in keep_ids
-                ]
+                high_quality = [a for i, a in enumerate(high_quality) if f"tmp:{i}" in keep_ids]
         except Exception as e:
             logger.warning("AI semantic dedup failed, proceeding without: %s", e)
 
@@ -368,7 +377,16 @@ class SummaryMixin:
             logger.info("Calling LLM chat.completions for daily summary (articles=%d)...", len(high_quality))
             response = await self.llm.chat(
                 messages=[
-                    {"role": "system", "content": system_prompt + persona_context + ("\nYou must respond in JSON format." if "json" not in (system_prompt + persona_context).lower() else "")},
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                        + persona_context
+                        + (
+                            "\nYou must respond in JSON format."
+                            if "json" not in (system_prompt + persona_context).lower()
+                            else ""
+                        ),
+                    },
                     {
                         "role": "user",
                         "content": f"Today's Date: {datetime.now().strftime('%Y-%m-%d')}\n\nHere are the articles (respond in JSON):\n{input_json}",
@@ -399,9 +417,8 @@ class SummaryMixin:
                 source = item.get("source", "未知来源")
                 stats[source] = stats.get(source, 0) + 1
             parsed_json["source_stats"] = stats
-            
+
             # Map the recommendation metrics back to the response
-            final_headlines = [n.get("headline") for n in top_news]
             rec_report["final_recommended_count"] = len(top_news)
             parsed_json["recommendation_report"] = rec_report
 
@@ -431,12 +448,8 @@ class SummaryMixin:
         """
         if not perspectives:
             # Single perspective — delegate to the standard pipeline
-            result = await self.generate_daily_summary_from_items(
-                content_items, session=session, board=board
-            )
+            result = await self.generate_daily_summary_from_items(content_items, session=session, board=board)
             return [result]
-
-        import asyncio
 
         if seed_summary is not None:
             first_result, fallback = seed_summary, {}
@@ -480,6 +493,7 @@ class SummaryMixin:
                 input_json = json.dumps(input_articles[:12], ensure_ascii=False)
 
                 from app.core.llm_config import language_directive as _lang_dir
+
                 lang_directive = _lang_dir(getattr(board, "output_language", None) if board else None)
                 response = await self.llm.chat(
                     messages=[
@@ -507,13 +521,10 @@ class SummaryMixin:
                 perspective_summary = DailySummaryResponse(**parsed_json)
                 results.append((perspective_summary, fallback))
             except Exception as error:
-                logger.warning(
-                    "Failed to generate perspective '%s': %s", perspective_name, error
-                )
+                logger.warning("Failed to generate perspective '%s': %s", perspective_name, error)
                 results.append((None, {}))
 
         return results
-
 
     async def generate_pure_llm_summary(
         self,
@@ -544,9 +555,7 @@ class SummaryMixin:
                 personas = await db_service.get_active_personas(session, board_id=board.id)
                 if personas:
                     lines = [f"- {p.category}: {p.content}" for p in personas]
-                    persona_context = (
-                        "\n\nUSER PREFERENCES:\n" + "\n".join(lines)
-                    )
+                    persona_context = "\n\nUSER PREFERENCES:\n" + "\n".join(lines)
             except Exception as error:
                 logger.warning("Failed to fetch personas for pure-LLM board: %s", error)
 
@@ -562,8 +571,19 @@ class SummaryMixin:
         output_schema = _daily_summary_schema()
 
         from app.core.llm_config import language_directive as _lang_dir
+
         lang_directive = _lang_dir(getattr(board, "output_language", None))
-        system_content = base_prompt + persona_context + output_schema + lang_directive + ("\nYou must respond in JSON format." if "json" not in (base_prompt + persona_context + output_schema + lang_directive).lower() else "")
+        system_content = (
+            base_prompt
+            + persona_context
+            + output_schema
+            + lang_directive
+            + (
+                "\nYou must respond in JSON format."
+                if "json" not in (base_prompt + persona_context + output_schema + lang_directive).lower()
+                else ""
+            )
+        )
         user_content = f"Today's Date: {datetime.now().strftime('%Y-%m-%d')}. Produce today's items now."
 
         try:
@@ -644,6 +664,7 @@ def build_summary_prompt_preview(
     editor_prompt = _get_editor_prompt(board, custom_instructions=custom_instructions)
     schema_suffix = _daily_summary_schema()
     from app.core.llm_config import language_directive
+
     lang_directive = language_directive(getattr(board, "output_language", None) if board else None)
 
     full_system = editor_prompt + schema_suffix + lang_directive

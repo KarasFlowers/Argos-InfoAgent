@@ -1,4 +1,5 @@
 """Board repository — CRUD for Board."""
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -9,7 +10,7 @@ class BoardRepo:
     async def list_boards(self, session: AsyncSession, active_only: bool = True) -> list[Board]:
         stmt = select(Board)
         if active_only:
-            stmt = stmt.where(Board.is_active == True)
+            stmt = stmt.where(Board.is_active.is_(True))
         stmt = stmt.order_by(Board.display_order, Board.id)
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -25,12 +26,12 @@ class BoardRepo:
         return result.scalars().first()
 
     async def get_default_board(self, session: AsyncSession) -> Board | None:
-        stmt = select(Board).where(Board.is_default == True).limit(1)
+        stmt = select(Board).where(Board.is_default.is_(True)).limit(1)
         result = await session.execute(stmt)
         board = result.scalars().first()
         if board:
             return board
-        stmt = select(Board).where(Board.is_active == True).order_by(Board.display_order, Board.id).limit(1)
+        stmt = select(Board).where(Board.is_active.is_(True)).order_by(Board.display_order, Board.id).limit(1)
         result = await session.execute(stmt)
         return result.scalars().first()
 
@@ -73,17 +74,25 @@ class BoardRepo:
         await session.refresh(board)
         return board
 
-    async def update_board(
-        self, session: AsyncSession, slug: str, updates: dict
-    ) -> Board | None:
+    async def update_board(self, session: AsyncSession, slug: str, updates: dict) -> Board | None:
         board = await self.get_board_by_slug(session, slug)
         if not board:
             return None
         allowed = {
-            "name", "icon", "description", "system_prompt",
-            "source_type", "source_config", "display_order", "is_active",
-            "schedule", "notify_channels", "perspectives", "prompt_key",
-            "output_language", "catchup_days"
+            "name",
+            "icon",
+            "description",
+            "system_prompt",
+            "source_type",
+            "source_config",
+            "display_order",
+            "is_active",
+            "schedule",
+            "notify_channels",
+            "perspectives",
+            "prompt_key",
+            "output_language",
+            "catchup_days",
         }
         for key, value in updates.items():
             if key in allowed and value is not None:

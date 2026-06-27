@@ -1,15 +1,14 @@
-from datetime import UTC, datetime, timedelta
-
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel, select
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
+from sqlmodel import SQLModel, select
 
-from app.models.domain import ContentCluster, DailySummary, NewsItem, Source
 from app.api import router
+from app.api.routes import board_wizard as board_wizard_router
+from app.models.domain import ContentCluster, DailySummary, NewsItem, Source
 from app.services.source_insights_service import (
     annotate_source_validation,
     get_source_coverage_analysis,
@@ -87,7 +86,9 @@ async def _make_summary_item(
 @pytest.mark.anyio
 async def test_source_coverage_analysis_summarizes_different_angles(isolated_session):
     board = await _make_board(isolated_session, "coverage")
-    cluster = ContentCluster(fingerprint="cluster-coverage", title="Model release", item_count=3, item_ids=[], board_id=board.id)
+    cluster = ContentCluster(
+        fingerprint="cluster-coverage", title="Model release", item_count=3, item_ids=[], board_id=board.id
+    )
     isolated_session.add(cluster)
     await isolated_session.commit()
     await isolated_session.refresh(cluster)
@@ -241,10 +242,34 @@ def test_annotate_source_validation_adds_trust_metadata():
 def test_prioritize_source_candidates_drops_risky_when_safe_pool_is_large():
     ranked = prioritize_source_candidates(
         [
-            {"url": "https://safe-a.example/feed", "trust_label": "high", "trust_score": 88, "article_count": 4, "ok": True},
-            {"url": "https://safe-b.example/feed", "trust_label": "medium", "trust_score": 76, "article_count": 3, "ok": True},
-            {"url": "https://safe-c.example/feed", "trust_label": "watch", "trust_score": 55, "article_count": 2, "ok": True},
-            {"url": "http://risky.example/feed", "trust_label": "risky", "trust_score": 22, "article_count": 6, "ok": True},
+            {
+                "url": "https://safe-a.example/feed",
+                "trust_label": "high",
+                "trust_score": 88,
+                "article_count": 4,
+                "ok": True,
+            },
+            {
+                "url": "https://safe-b.example/feed",
+                "trust_label": "medium",
+                "trust_score": 76,
+                "article_count": 3,
+                "ok": True,
+            },
+            {
+                "url": "https://safe-c.example/feed",
+                "trust_label": "watch",
+                "trust_score": 55,
+                "article_count": 2,
+                "ok": True,
+            },
+            {
+                "url": "http://risky.example/feed",
+                "trust_label": "risky",
+                "trust_score": 22,
+                "article_count": 6,
+                "ok": True,
+            },
         ]
     )
 
@@ -258,10 +283,38 @@ def test_prioritize_source_candidates_drops_risky_when_safe_pool_is_large():
 def test_review_source_candidates_reports_why_risky_entries_were_dropped():
     report = review_source_candidates(
         [
-            {"url": "https://safe-a.example/feed", "trust_label": "high", "trust_score": 88, "article_count": 4, "ok": True, "quality_summary": "Trusted publication."},
-            {"url": "https://safe-b.example/feed", "trust_label": "medium", "trust_score": 71, "article_count": 3, "ok": True, "quality_summary": "Stable coverage."},
-            {"url": "https://safe-c.example/feed", "trust_label": "watch", "trust_score": 51, "article_count": 2, "ok": True, "quality_summary": "Monitor quality."},
-            {"url": "http://risky.example/feed", "trust_label": "risky", "trust_score": 22, "article_count": 6, "ok": True, "quality_summary": "No HTTPS and poor signals."},
+            {
+                "url": "https://safe-a.example/feed",
+                "trust_label": "high",
+                "trust_score": 88,
+                "article_count": 4,
+                "ok": True,
+                "quality_summary": "Trusted publication.",
+            },
+            {
+                "url": "https://safe-b.example/feed",
+                "trust_label": "medium",
+                "trust_score": 71,
+                "article_count": 3,
+                "ok": True,
+                "quality_summary": "Stable coverage.",
+            },
+            {
+                "url": "https://safe-c.example/feed",
+                "trust_label": "watch",
+                "trust_score": 51,
+                "article_count": 2,
+                "ok": True,
+                "quality_summary": "Monitor quality.",
+            },
+            {
+                "url": "http://risky.example/feed",
+                "trust_label": "risky",
+                "trust_score": 22,
+                "article_count": 6,
+                "ok": True,
+                "quality_summary": "No HTTPS and poor signals.",
+            },
         ]
     )
 
@@ -274,9 +327,27 @@ def test_review_source_candidates_reports_why_risky_entries_were_dropped():
 def test_review_source_candidates_does_not_count_failed_sources_as_safe():
     report = review_source_candidates(
         [
-            {"url": "https://safe-a.example/feed", "trust_label": "medium", "trust_score": 70, "article_count": 0, "ok": False},
-            {"url": "https://safe-b.example/feed", "trust_label": "medium", "trust_score": 68, "article_count": 0, "ok": False},
-            {"url": "http://risky.example/feed", "trust_label": "risky", "trust_score": 22, "article_count": 5, "ok": True},
+            {
+                "url": "https://safe-a.example/feed",
+                "trust_label": "medium",
+                "trust_score": 70,
+                "article_count": 0,
+                "ok": False,
+            },
+            {
+                "url": "https://safe-b.example/feed",
+                "trust_label": "medium",
+                "trust_score": 68,
+                "article_count": 0,
+                "ok": False,
+            },
+            {
+                "url": "http://risky.example/feed",
+                "trust_label": "risky",
+                "trust_score": 22,
+                "article_count": 5,
+                "ok": True,
+            },
         ],
         min_non_risky=2,
     )
@@ -314,10 +385,22 @@ async def test_source_alternatives_endpoint_returns_ranked_replacements(isolated
             "sample_titles": ["One", "Two", "Three"],
         }
 
-    with patch.object(router.llm_service, "suggest_alternative_feeds", AsyncMock(return_value=[
-        {"original": source.url, "suggestions": ["https://safe-a.example/feed", "http://risky-b.example/feed"]},
-    ])), patch.object(router, "_test_single_feed", side_effect=fake_test_feed):
-        payload = await router.get_board_source_alternatives_endpoint(
+    with (
+        patch.object(
+            board_wizard_router.llm_service,
+            "suggest_alternative_feeds",
+            AsyncMock(
+                return_value=[
+                    {
+                        "original": source.url,
+                        "suggestions": ["https://safe-a.example/feed", "http://risky-b.example/feed"],
+                    },
+                ]
+            ),
+        ),
+        patch.object(board_wizard_router, "_test_single_feed", side_effect=fake_test_feed),
+    ):
+        payload = await board_wizard_router.get_board_source_alternatives_endpoint(
             board.slug,
             source.id,
             session=isolated_session,
@@ -370,12 +453,18 @@ async def test_source_discovery_endpoint_skips_existing_sources_and_returns_new_
         },
     ]
 
-    with patch.object(router.llm_service, "wizard_plan_sources", AsyncMock(return_value=plan)), \
-         patch.object(router, "_discover_rss_candidates", AsyncMock(return_value=[entry["url"] for entry in verified])), \
-         patch.object(router, "_verify_and_fix_feeds", AsyncMock(return_value=verified)):
-        payload = await router.discover_board_sources_endpoint(
+    with (
+        patch.object(board_wizard_router.llm_service, "wizard_plan_sources", AsyncMock(return_value=plan)),
+        patch.object(
+            board_wizard_router,
+            "_discover_rss_candidates",
+            AsyncMock(return_value=[entry["url"] for entry in verified]),
+        ),
+        patch.object(board_wizard_router, "_verify_and_fix_feeds", AsyncMock(return_value=verified)),
+    ):
+        payload = await board_wizard_router.discover_board_sources_endpoint(
             board.slug,
-            router.BoardSourceDiscoverRequest(query="agent news", limit=5),
+            board_wizard_router.BoardSourceDiscoverRequest(query="agent news", limit=5),
             session=isolated_session,
         )
 

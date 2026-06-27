@@ -1,4 +1,5 @@
 """LLM article quality scoring."""
+
 import json
 import logging
 
@@ -51,9 +52,7 @@ class ScoringMixin:
                 scores = []
 
             high_quality_indices = {
-                item["index"]
-                for item in scores
-                if isinstance(item, dict) and item.get("score", 0) >= quality_threshold
+                item["index"] for item in scores if isinstance(item, dict) and item.get("score", 0) >= quality_threshold
             }
 
             filtered = [article for i, article in enumerate(articles) if i in high_quality_indices]
@@ -71,12 +70,12 @@ class ScoringMixin:
                 "total_fetched": len(articles),
                 "passed_count": len(filtered),
                 "excluded_count": len(excluded),
-                "excluded_samples": [a["title"] for a in excluded[:5]]
+                "excluded_samples": [a["title"] for a in excluded[:5]],
             }
 
             if len(filtered) < 8 and len(articles) >= 8:
                 sorted_scores = sorted(scores, key=lambda item: item.get("score", 0), reverse=True)
-                top_indices = {item["index"] for item in sorted_scores[:max(10, len(filtered))]}
+                top_indices = {item["index"] for item in sorted_scores[: max(10, len(filtered))]}
                 filtered = [article for i, article in enumerate(articles) if i in top_indices]
                 logger.info("Fallback: kept top %s articles by score (needed >=8)", len(filtered))
 

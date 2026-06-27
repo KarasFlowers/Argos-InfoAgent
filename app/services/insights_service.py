@@ -28,20 +28,13 @@ logger = logging.getLogger(__name__)
 def _last_n_dates(days: int) -> list[str]:
     """Return ISO date strings for the last *days* days, oldest first."""
     today = datetime.now()
-    return [
-        (today - timedelta(days=i)).strftime("%Y-%m-%d")
-        for i in range(days - 1, -1, -1)
-    ]
+    return [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
 
 
 async def _load_items_within(session: AsyncSession, days: int) -> list[tuple[str, NewsItem]]:
     """Return [(date, NewsItem)] for summaries within the last *days* days."""
     min_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    stmt = (
-        select(DailySummary)
-        .where(DailySummary.date >= min_date)
-        .order_by(desc(DailySummary.date))
-    )
+    stmt = select(DailySummary).where(DailySummary.date >= min_date).order_by(desc(DailySummary.date))
     result = await session.execute(stmt)
     summaries = result.scalars().all()
 
@@ -62,6 +55,7 @@ async def _load_items_within(session: AsyncSession, days: int) -> list[tuple[str
 # -----------------------------------------------------------------
 # Public API
 # -----------------------------------------------------------------
+
 
 async def get_topic_heatmap(session: AsyncSession, days: int = 7) -> dict:
     """
@@ -105,10 +99,7 @@ async def get_topic_heatmap(session: AsyncSession, days: int = 7) -> dict:
 
     # Sort topics by total occurrences, cap to top-15 to keep UI tidy
     topics_sorted = sorted(
-        (
-            {"name": name, "counts": counts, "total": sum(counts)}
-            for name, counts in buckets.items()
-        ),
+        ({"name": name, "counts": counts, "total": sum(counts)} for name, counts in buckets.items()),
         key=lambda x: x["total"],
         reverse=True,
     )[:15]
@@ -227,7 +218,6 @@ async def get_trending_topics(session: AsyncSession, days: int = 7, top_n: int =
           ]
         }
     """
-    import math
 
     half = days // 2
     if half < 1:

@@ -7,15 +7,12 @@ Tests:
   - Edge cases (empty fields, special characters)
 """
 
-import pytest
-from pydantic import ValidationError
-
 from app.models.schemas import ContentItem, RSSItem, RSSResponse
-
 
 # ---------------------------------------------------------------------------
 # ContentItem
 # ---------------------------------------------------------------------------
+
 
 class TestContentItem:
     def test_minimal_construction(self):
@@ -82,6 +79,7 @@ class TestContentItem:
 # RSSItem
 # ---------------------------------------------------------------------------
 
+
 class TestRSSItem:
     def test_construction(self):
         item = RSSItem(
@@ -98,6 +96,7 @@ class TestRSSItem:
 # ---------------------------------------------------------------------------
 # RSSResponse
 # ---------------------------------------------------------------------------
+
 
 class TestRSSResponse:
     def test_construction(self):

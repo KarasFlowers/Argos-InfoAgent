@@ -1,7 +1,8 @@
 """Article-level read-state repository."""
+
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,7 +123,7 @@ class ReadStateRepo:
                     board_match,
                 ),
             )
-            .where(or_(ArticleReadState.id.is_(None), ArticleReadState.is_read == False))
+            .where(or_(ArticleReadState.id.is_(None), ArticleReadState.is_read.is_(False)))
             .where(NewsItem.original_link.is_not(None), NewsItem.original_link != "")
             .group_by(DailySummary.date)
             .order_by(DailySummary.date.desc())
@@ -170,7 +171,7 @@ class ReadStateRepo:
                     board_match,
                 ),
             )
-            .where(or_(ArticleReadState.id.is_(None), ArticleReadState.is_read == False))
+            .where(or_(ArticleReadState.id.is_(None), ArticleReadState.is_read.is_(False)))
             .where(NewsItem.original_link.is_not(None), NewsItem.original_link != "")
             .order_by(DailySummary.date.desc(), NewsItem.id.desc())
         )
@@ -182,6 +183,7 @@ class ReadStateRepo:
             cutoff = datetime.now().date()
             # SQLite dates are YYYY-MM-DD strings; string ordering matches date ordering.
             from datetime import timedelta
+
             stmt = stmt.where(DailySummary.date >= (cutoff - timedelta(days=days)).strftime("%Y-%m-%d"))
         result = await session.execute(stmt)
         return [(date, item) for date, item in result.all()]

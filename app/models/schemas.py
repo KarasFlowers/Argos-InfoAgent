@@ -3,15 +3,16 @@ from pydantic import BaseModel, Field, model_validator
 
 class ContentItem(BaseModel):
     """Unified content item from any source (RSS, HN, Reddit, GitHub, etc.)."""
-    id: str                                        # {source}:{subtype}:{native_id}
-    source_type: str                               # "rss" | "hackernews" | "reddit" | "github"
+
+    id: str  # {source}:{subtype}:{native_id}
+    source_type: str  # "rss" | "hackernews" | "reddit" | "github"
     title: str
     url: str
-    content: str | None = None                     # body text + appended comments
+    content: str | None = None  # body text + appended comments
     author: str | None = None
-    published_at: str = ""                         # ISO-8601 (empty when unavailable)
-    source_name: str = ""                          # display label (e.g. "r/LocalLLaMA")
-    metadata: dict = Field(default_factory=dict)   # score, subreddit, repo, etc.
+    published_at: str = ""  # ISO-8601 (empty when unavailable)
+    source_name: str = ""  # display label (e.g. "r/LocalLLaMA")
+    metadata: dict = Field(default_factory=dict)  # score, subreddit, repo, etc.
 
     @model_validator(mode="before")
     @classmethod
@@ -55,6 +56,9 @@ class SummaryItem(BaseModel):
     cluster_id: int | None = None
     is_catchup: bool = False
     original_date: str | None = None  # YYYY-MM-DD of the original summary when is_catchup=True
+    recommendation_reason: str = ""
+    preference_matches: list[str] = Field(default_factory=list)
+    assistant_questions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -150,6 +154,7 @@ class DailySummaryResponse(BaseModel):
         # Date fallback
         if not values.get("date"):
             from datetime import datetime
+
             values["date"] = datetime.now().strftime("%Y-%m-%d")
 
         # Overview fallback

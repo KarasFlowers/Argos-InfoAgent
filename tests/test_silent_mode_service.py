@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from app.models.domain import Board
 from app.models.schemas import DailySummaryResponse, SummaryItem
 from app.services import silent_mode_service as sms

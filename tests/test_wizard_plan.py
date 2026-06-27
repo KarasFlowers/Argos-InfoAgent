@@ -15,7 +15,7 @@ class TestNormalizePlan:
     def test_fills_defaults_for_empty(self):
         p = _norm({})
         assert p["ready"] is False
-        assert p["source_type"] == "rss"   # safe default
+        assert p["source_type"] == "rss"  # safe default
         assert p["icon"] == "📌"
         assert p["search_terms"] == []
         assert p["candidates"]["hackernews"] is False
@@ -27,15 +27,17 @@ class TestNormalizePlan:
         assert _norm({"source_type": "reddit"})["source_type"] == "reddit"
 
     def test_filters_malformed_rsshub_candidates(self):
-        p = _norm({
-            "candidates": {
-                "rsshub": [
-                    {"platform": "jike_user", "id": "ABC"},   # valid
-                    {"id": "no-platform"},                      # dropped: no platform
-                    "not-a-dict",                               # dropped: not a dict
-                ],
+        p = _norm(
+            {
+                "candidates": {
+                    "rsshub": [
+                        {"platform": "jike_user", "id": "ABC"},  # valid
+                        {"id": "no-platform"},  # dropped: no platform
+                        "not-a-dict",  # dropped: not a dict
+                    ],
+                }
             }
-        })
+        )
         assert p["candidates"]["rsshub"] == [{"platform": "jike_user", "id": "ABC"}]
 
     def test_legacy_subreddit_candidates_are_dropped(self):
