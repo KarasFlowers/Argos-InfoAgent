@@ -6,7 +6,7 @@ Responsibilities:
    interactive terminal) prompt for the LLM API key.
 2. Ensure ``data/`` subdirectories exist.
 """
-import os
+
 import shutil
 import sys
 from pathlib import Path
@@ -19,6 +19,17 @@ DATA_DIRS = [
     PROJECT_ROOT / "data" / "chroma",
     PROJECT_ROOT / "logs",
 ]
+
+
+def _write_llm_api_key(env_file: Path, api_key: str) -> None:
+    """Persist the first-run key in the generic LLM config field."""
+    text = env_file.read_text(encoding="utf-8")
+    placeholder = '# LLM_API_KEY="sk-your-api-key-here"'
+    if placeholder in text:
+        text = text.replace(placeholder, f'LLM_API_KEY="{api_key}"')
+    elif "LLM_API_KEY=" not in text:
+        text += f'\nLLM_API_KEY="{api_key}"\n'
+    env_file.write_text(text, encoding="utf-8")
 
 
 def ensure_env() -> None:
@@ -39,18 +50,16 @@ def ensure_env() -> None:
         print("  .env file not found. Creating from template...")
         print()
 
-        api_key = input("  Enter your DeepSeek API key (or press Enter to skip): ").strip()
+        api_key = input("  LLM_API_KEY (press Enter to skip): ").strip()
 
         shutil.copy2(ENV_TEMPLATE, ENV_FILE)
 
         if api_key:
-            text = ENV_FILE.read_text(encoding="utf-8")
-            text = text.replace('DEEPSEEK_API_KEY=""', f'DEEPSEEK_API_KEY="{api_key}"')
-            ENV_FILE.write_text(text, encoding="utf-8")
-            print(f"  ✓ .env created with your DeepSeek API key.")
+            _write_llm_api_key(ENV_FILE, api_key)
+            print("  ✓ .env created with your LLM_API_KEY.")
         else:
-            print(f"  ✓ .env created from template.")
-            print(f"  ⚠ Please edit {ENV_FILE} and set DEEPSEEK_API_KEY or LLM_API_KEY before using LLM features.")
+            print("  ✓ .env created from template.")
+            print(f"  ⚠ Please edit {ENV_FILE} and set LLM_API_KEY before using LLM features.")
         print()
     else:
         # Non-interactive (e.g. Docker, systemd) — silent copy

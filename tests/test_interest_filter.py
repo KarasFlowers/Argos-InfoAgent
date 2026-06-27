@@ -9,7 +9,6 @@ Tests:
   - Scoring context generation
 """
 
-import pytest
 from unittest.mock import MagicMock
 
 from app.services.interest_filter import InterestFilter
@@ -37,6 +36,7 @@ def _make_item(title: str, content: str = "", source_type: str = "rss"):
 # Empty / no personas
 # ---------------------------------------------------------------------------
 
+
 class TestNoPersonas:
     def test_empty_personas_returns_all(self):
         f = InterestFilter([])
@@ -52,6 +52,7 @@ class TestNoPersonas:
 # ---------------------------------------------------------------------------
 # Block topic filtering
 # ---------------------------------------------------------------------------
+
 
 class TestBlockTopic:
     def test_blocks_matching_title(self):
@@ -103,6 +104,7 @@ class TestBlockTopic:
 # Focus topic boosting
 # ---------------------------------------------------------------------------
 
+
 class TestFocusTopic:
     def test_boosts_matching_items_to_front(self):
         personas = [_make_persona("LLM, transformer", category="focus_topic")]
@@ -135,6 +137,7 @@ class TestFocusTopic:
 # Combined block + boost
 # ---------------------------------------------------------------------------
 
+
 class TestCombined:
     def test_block_then_boost(self):
         personas = [
@@ -155,6 +158,7 @@ class TestCombined:
 # ---------------------------------------------------------------------------
 # build_scoring_context
 # ---------------------------------------------------------------------------
+
 
 class TestScoringContext:
     def test_empty_personas_returns_empty(self):

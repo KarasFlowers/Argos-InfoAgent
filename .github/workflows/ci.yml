@@ -19,12 +19,27 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Install ruff
         run: pip install ruff
       - name: Ruff lint
         run: ruff check .
       - name: Ruff format check
         run: ruff format --check .
+      - name: Git diff whitespace check
+        run: git diff --check
+      - name: Docker Compose config check
+        run: docker compose config --quiet
+      - name: Docker smoke script help
+        run: python scripts/docker_smoke.py --help
+      - name: Runtime smoke script help
+        run: python scripts/runtime_smoke.py --help
+      - name: Frontend syntax check
+        run: node --check app/web/static/app.js
+      - name: Frontend API key smoke
+        run: node scripts/frontend_auth_smoke.js
 
   test:
     runs-on: ubuntu-latest
@@ -57,4 +72,6 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379/0
           RAG_ENABLED: "false"
-        run: pytest tests/ -v
+        run: python -m pytest
+      - name: Runtime smoke
+        run: python scripts/runtime_smoke.py --timeout 90

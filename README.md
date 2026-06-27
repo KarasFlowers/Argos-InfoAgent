@@ -32,9 +32,9 @@ Expose all capabilities to AI assistants (Claude, Cursor, Windsurf, etc.) via th
 
 Explicit like/dislike feedback + auto-extracted interests + **user memory system** (persistent preferences and context). The more you use it, the better it knows you.
 
-### 📢 Multi-Channel Notifications
+### 📢 Email Notifications
 
-Push daily briefings via **email, Webhook, Bark (iOS), or Telegram** — automatically on schedule or on demand.
+Push daily briefings via **SMTP email** — automatically on schedule or on demand. External notifications are disabled by default.
 
 ---
 
@@ -78,9 +78,17 @@ cp .env.template .env
 # 3. Start the stack
 docker compose up -d
 
+# Optional: run production smoke checks (health + API key behavior)
+python scripts/docker_smoke.py --no-build
+
+# Optional: local non-Docker runtime smoke
+python scripts/runtime_smoke.py
+
 # 4. Open in browser
 # Visit http://127.0.0.1:8000
 ```
+
+The Compose stack loads `.env` through an optional `env_file`, keeps Redis on the internal Docker network, and only publishes the Argos web port.
 
 ### One-Click Start (Recommended for Local)
 
@@ -153,13 +161,14 @@ Copy `.env.template` to `.env` and configure your settings. At minimum, you need
 |----------|----------|---------|-------------|
 | `LLM_API_KEY` | **Yes** | - | API key for any OpenAI-compatible LLM provider |
 | `LLM_MODEL` | No | `deepseek-chat` | Default model name for all LLM calls |
-| `LLM_BASE_URL` | No | `https://api.deepseek.com/v1` | Base URL of the LLM API |
+| `LLM_BASE_URL` | No | - | Base URL of the LLM API. Required when using generic `LLM_API_KEY`; legacy `DEEPSEEK_BASE_URL` is used only when `LLM_API_KEY` is unset |
 | `LLM_TIMEOUT` | No | `180` | Request timeout in seconds |
 | `LLM_MAX_RETRIES` | No | `1` | Max retries on transient failures |
 | `FAST_LLM` | No | - | "fast" tier model in `provider:model` format (e.g. `openai:gpt-4o-mini`). Empty = fall back to `LLM_MODEL` |
 | `SMART_LLM` | No | - | "smart" tier model in `provider:model` format. Empty = fall back to `LLM_MODEL` |
 | `DEEPSEEK_API_KEY` | No | - | Legacy alias — used as fallback when `LLM_API_KEY` is unset |
-| `API_KEY` | No | - | API key for authenticating `/api/v1/*` requests (via `X-API-Key` header). Unset = no auth |
+| `API_KEY` | No | - | API key for private API requests via `X-API-Key`. Unset = no auth |
+| `PUBLIC_BASE_URL` | No | `http://localhost:8000` | Public origin used in generated RSS/canonical links. Must be an absolute `http(s)` URL without query/fragment |
 | `SQLALCHEMY_DATABASE_URI` | No | `sqlite+aiosqlite:///./data/sqlite/argos.db` | Async SQLite database path |
 | `CHROMA_DB_DIR` | No | `./data/chroma` | ChromaDB persistent storage path |
 | `REDIS_URL` | No | `redis://localhost:6379` | Redis connection URL for caching |
@@ -167,7 +176,8 @@ Copy `.env.template` to `.env` and configure your settings. At minimum, you need
 | `RAG_BACKGROUND_INGEST_WORKERS` | No | `2` | Number of background ingest worker tasks |
 | `RAG_HYDE_ENABLED` | No | `True` | Enable HyDE (Hypothetical Document Embedding) query rewriting |
 | `HISTORY_DAYS_TO_KEEP` | No | `7` | Number of days to retain historical data |
-| `CORS_ORIGINS` | No | `http://localhost:3000,...` | Comma-separated allowed frontend origins |
+| `CORS_ORIGINS` | No | `http://localhost:3000,...` | Comma-separated allowed frontend origins. Values must be origins only, not paths; using `*` disables credentialed CORS |
+| `CORS_ALLOW_CREDENTIALS` | No | `True` | Allow credentialed CORS for explicit origins. Ignored when `CORS_ORIGINS=*` |
 | `GITHUB_TOKEN` | No | - | GitHub personal access token (increases rate limit to 5000 req/hr) |
 | `HN_FETCH_TOP_STORIES` | No | `30` | Number of top Hacker News stories to fetch |
 | `HN_MIN_SCORE` | No | `100` | Minimum Hacker News score threshold |
@@ -179,13 +189,21 @@ Copy `.env.template` to `.env` and configure your settings. At minimum, you need
 | `SMTP_FROM` | No | - | Sender email address (e.g. `Argos <you@example.com>`) |
 | `EMAIL_SUBSCRIBERS` | No | `[]` | JSON list of subscriber email addresses |
 | `DAILY_PUSH_TIME` | No | `08:00` | Daily push time (HH:MM format) |
-| `NOTIFY_CHANNELS` | No | `email` | Comma-separated channels: `email,webhook,bark,telegram` |
-| `WEBHOOK_URL` | No | - | Generic webhook endpoint (POST JSON) |
-| `WEBHOOK_SECRET` | No | - | HMAC-SHA256 signing key for webhook |
-| `BARK_URL` | No | - | Bark iOS push URL (e.g. `https://api.day.app/KEY`) |
-| `BARK_GROUP` | No | `Argos` | Bark notification group name |
-| `TELEGRAM_BOT_TOKEN` | No | - | Telegram bot token |
-| `TELEGRAM_CHAT_ID` | No | - | Telegram chat/group ID to send messages to |
+| `LOG_FORMAT` | No | - | Set to `json` for structured JSON logs. Common secret fields and token-like values are redacted before rendering |
+| `NOTIFY_CHANNELS` | No | - | Comma-separated channels. Empty disables scheduled external notifications; currently only `email` is implemented |
+
+### Security & Self-Hosting Notes
+
+- Argos is designed as a private single-user/self-hosted app by default. It does not implement multi-tenant accounts or role-based access control.
+- If `API_KEY` is set, private API routes require `X-API-Key: <value>`. Public paths remain open: `/`, `/favicon.ico`, `/static/*`, `/feed`, and `/api/v1/ping`; `OPTIONS` requests are allowed for CORS preflight.
+- The web dashboard has a "Key" control that stores `API_KEY` in browser local storage and sends it as `X-API-Key` for same-origin API requests. Use it only on trusted personal devices.
+- `LLM_API_KEY`, `DEEPSEEK_API_KEY`, and other provider keys are read from environment variables. New installs do not copy these secrets into the SQLite `ModelApiConfig` table.
+- Keep `PUBLIC_BASE_URL` aligned with your externally reachable URL when serving RSS/feed links behind a reverse proxy.
+- Back up `data/sqlite/argos.db` and `data/chroma/` together with `python scripts/backup_data.py`; timestamp collisions create a suffixed archive instead of overwriting an existing backup. Before restoring, stop Argos and run `python scripts/restore_data.py backups/<archive>.zip --dry-run` to inspect target paths, then restore with `--force` only when replacing existing local data.
+- Set `RAG_ENABLED=false` for lightweight deployments that do not need article-level RAG or the large embedding model downloads.
+- Scheduled external notifications are disabled by default. Set `NOTIFY_CHANNELS=email` and SMTP settings explicitly before enabling email push.
+- Read [SECURITY.md](SECURITY.md) before exposing Argos outside localhost or a private network.
+- Track release-hardening evidence in [docs/INDUSTRIALIZATION_AUDIT.md](docs/INDUSTRIALIZATION_AUDIT.md).
 
 ## Board Source Types
 
@@ -259,7 +277,7 @@ The service layer uses a **facade pattern** to keep imports backward-compatible 
 - **LLM Service**: `ScoringMixin`, `SummaryMixin`, `WeeklyMixin`, `WizardMixin` + `LLMClient` with CircuitBreaker and multi-tier routing
 - **RAG Service**: Hybrid retrieval pipeline (Bi-Encoder + BM25 + Cross-Encoder reranking), HyDE rewriting, background ingestion, cross-article search
 - **DB Service**: `SummaryRepo`, `PersonaRepo`, `BoardRepo`
-- **Notification**: `dispatcher.py` + `channels.py` — multi-channel dispatcher (email, webhook, Bark, Telegram)
+- **Notification**: `notification/dispatcher.py` — email dispatcher; unsupported channels fail closed
 - **Source Adapters**: Pluggable adapters for `rss`, `hackernews`, `reddit`, `github`, `multi`, `pure_llm`
 
 ### Standalone Services
@@ -298,7 +316,7 @@ The service layer uses a **facade pattern** to keep imports backward-compatible 
 │   │   ├── llm/                # LLM client, scoring, summary, weekly, wizard
 │   │   ├── rag/                # RAG pipeline (bi-encoder, cross-encoder, ChromaDB, BM25)
 │   │   ├── repositories/      # Database repositories (summary, persona, board)
-│   │   ├── notification/      # Multi-channel dispatcher (email, webhook, bark, telegram)
+│   │   ├── notification/      # Notification dispatcher (email)
 │   │   ├── chat_history_service.py
 │   │   ├── clustering_service.py
 │   │   ├── dedup_service.py
@@ -359,7 +377,7 @@ The service layer uses a **facade pattern** to keep imports backward-compatible 
 
 ## API Reference
 
-All endpoints are prefixed with `/api/v1`. When `API_KEY` is set, requests must include the `X-API-Key` header.
+All private endpoints are prefixed with `/api/v1`; table entries below are shown relative to that prefix unless explicitly marked as a public page. When `API_KEY` is set, private requests must include the `X-API-Key` header; `/api/v1/ping` stays public for health checks and `OPTIONS` stays open for CORS preflight.
 
 ### Briefing & Summary
 
@@ -429,6 +447,7 @@ All endpoints are prefixed with `/api/v1`. When `API_KEY` is set, requests must 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/ping` | Health check |
+| GET | `/status` | Private readiness diagnostics (DB/features/auth flags, no secrets) |
 | GET | `/metrics` | System metrics (token usage, latency) |
 | GET | `/metrics/cost` | Per-label LLM cost breakdown |
 | GET | `/admin/tasks` | Background task run history |
@@ -458,5 +477,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-

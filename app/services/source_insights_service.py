@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.domain import ContentCluster, DailySummary, NewsItem, Source
+from app.models.domain import ContentCluster, DailySummary, NewsItem
 
 _MULTIPART_SUFFIXES = {
     "co.uk",
@@ -86,7 +86,7 @@ def _host_for_url(url: str) -> str:
         return ""
     for prefix in ("www.", "feeds.", "rss."):
         if host.startswith(prefix):
-            host = host[len(prefix):]
+            host = host[len(prefix) :]
     return host
 
 
@@ -146,7 +146,6 @@ def score_source_quality(
     notes: list[str] = []
     score = 48.0
     host = _host_for_url(url)
-    root = _root_domain(host)
     override = _normalize_credibility_override(credibility_override)
 
     if override:
@@ -263,11 +262,7 @@ def review_source_candidates(entries: list[dict], *, min_non_risky: int = 3) -> 
     options, risky entries are dropped and surfaced in ``dropped``.
     """
     ranked = _rank_source_candidates(entries)
-    safe_count = sum(
-        1
-        for entry in ranked
-        if entry.get("ok") and entry.get("trust_label") != "risky"
-    )
+    safe_count = sum(1 for entry in ranked if entry.get("ok") and entry.get("trust_label") != "risky")
     should_drop_risky = safe_count >= min_non_risky
     selected: list[dict] = []
     dropped: list[dict] = []
@@ -279,32 +274,25 @@ def review_source_candidates(entries: list[dict], *, min_non_risky: int = 3) -> 
             "selection_reason": reason,
         }
         if not entry.get("ok"):
-            merged["selection_reason"] = (
-                "Dropped because source validation failed. "
-                + reason
-            )
+            merged["selection_reason"] = "Dropped because source validation failed. " + reason
             dropped.append(merged)
         elif should_drop_risky and entry.get("trust_label") == "risky":
-            merged["selection_reason"] = (
-                "Dropped because safer verified sources were already available. "
-                + reason
-            )
+            merged["selection_reason"] = "Dropped because safer verified sources were already available. " + reason
             dropped.append(merged)
         else:
             selected.append(merged)
 
     if dropped and selected:
-        summary = (
-            f"Kept {len(selected)} stronger verified sources and filtered out "
-            f"{len(dropped)} risky option(s)."
-        )
+        summary = f"Kept {len(selected)} stronger verified sources and filtered out " f"{len(dropped)} risky option(s)."
     elif dropped:
         summary = (
             "No usable verified source candidates are currently available; "
             f"filtered out {len(dropped)} failed or risky option(s)."
         )
     elif selected:
-        summary = f"Kept {len(selected)} verified source option(s); the pool still needs manual review for final quality."
+        summary = (
+            f"Kept {len(selected)} verified source option(s); the pool still needs manual review for final quality."
+        )
     else:
         summary = "No verified source candidates are currently available."
 
@@ -417,11 +405,7 @@ async def get_source_coverage_analysis(
             cluster_ids.append(cluster_id)
 
     cluster_stmt = select(ContentCluster).where(ContentCluster.id.in_(cluster_ids))
-    clusters = {
-        cluster.id: cluster
-        for cluster in (await session.execute(cluster_stmt)).scalars().all()
-        if cluster.id
-    }
+    clusters = {cluster.id: cluster for cluster in (await session.execute(cluster_stmt)).scalars().all() if cluster.id}
 
     analyses: list[dict] = []
     for cluster_id, items in grouped.items():

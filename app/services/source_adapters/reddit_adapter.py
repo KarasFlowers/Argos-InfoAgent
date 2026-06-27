@@ -4,8 +4,9 @@ Reddit source adapter.
 Reads ``board.source_config`` for Reddit-specific settings (subreddits, users,
 fetch_comments), fetches via the Reddit scraper, and hands off to the LLM editor.
 """
+
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,12 +42,10 @@ class RedditAdapter(SourceAdapter):
             "enabled": True,
             "subreddits": config.get("subreddits", []),
             "users": config.get("users", []),
-            "fetch_comments": config.get(
-                "fetch_comments", settings.REDDIT_FETCH_COMMENTS
-            ),
+            "fetch_comments": config.get("fetch_comments", settings.REDDIT_FETCH_COMMENTS),
         }
 
-        since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        since = datetime.now(UTC) - timedelta(hours=since_hours)
 
         client = get_http_client()
         scraper = RedditScraper(scraper_config, client)

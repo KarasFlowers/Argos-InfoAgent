@@ -10,43 +10,44 @@ import asyncio
 import logging
 import re
 import uuid
-from datetime import datetime, UTC
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from urllib.parse import urljoin
 
 import httpx
 import trafilatura
 from bs4 import BeautifulSoup
-import numpy as np
-from app.core.config import settings
-from app.core.url_safety import ensure_public_url_target
-from app.core.db import AsyncSessionLocal
-from app.models.domain import ArticleOverview
 from sqlalchemy.future import select
+
+from app.core.db import AsyncSessionLocal
+from app.core.url_safety import ensure_public_url_target
+from app.models.domain import ArticleOverview
 
 # All mutable state and model loaders live in _state.py
 from app.services.rag._state import (  # noqa: F401
-    is_rag_available,
+    _article_overview_cache,
+    _article_quality_cache,
+    _article_text_cache,
+    _article_text_tasks,
+    _bm25_indices,
+    _BoundedLRU,
+    _content_fallback,
+    _get_chroma_client,
+    _ingest_queue,
+    _ingest_status,
+    _ingested_urls,
     _require_rag,
+    close_chroma_client,
     get_bi_encoder,
     get_cross_encoder,
     init_chroma,
+    is_rag_available,
     prewarm_models,
-    close_chroma_client,
-    _get_chroma_client,
-    _BoundedLRU,
-    _ingested_urls,
-    _bm25_indices,
-    _article_text_cache,
-    _article_text_tasks,
-    _article_overview_cache,
-    _article_quality_cache,
-    _ingest_queue,
-    _ingest_status,
-    _content_fallback,
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_ARTICLE_HTML_BYTES = 10 * 1024 * 1024
 
 
 def enqueue_for_ingest(
@@ -130,6 +131,7 @@ async def ingest_worker_loop(worker_id: int = 0) -> None:
 
 def _build_bm25_index(chunks: list[str]) -> tuple:
     from rank_bm25 import BM25Okapi
+
     tokenized = [chunk.lower().split() for chunk in chunks]
     return BM25Okapi(tokenized), chunks
 
@@ -159,9 +161,17 @@ def _ensure_bm25_index(url: str) -> tuple | None:
     return index
 
 
+def _bounded_response_text(response: httpx.Response, *, url: str, max_bytes: int = MAX_ARTICLE_HTML_BYTES) -> str:
+    content_size = len(response.content)
+    if content_size > max_bytes:
+        raise ValueError(f"Article HTML for '{url}' is too large ({content_size} bytes).")
+    return response.text
+
+
 # -------------------------------------------------------------------
 # Step 1: Web Scraping
 # -------------------------------------------------------------------
+
 
 async def fetch_article_text(url: str) -> str:
     """
@@ -199,7 +209,7 @@ async def fetch_article_text(url: str) -> str:
                         continue
 
                     response.raise_for_status()
-                    html_content = response.text
+                    html_content = _bounded_response_text(response, url=current_url)
                     logger.info("Successfully fetched article HTML (len=%d) from %s", len(html_content), current_url)
                     break
                 else:
@@ -211,11 +221,7 @@ async def fetch_article_text(url: str) -> str:
             raise
 
         text = await asyncio.to_thread(
-            trafilatura.extract,
-            html_content,
-            include_comments=False,
-            include_tables=True,
-            no_fallback=False
+            trafilatura.extract, html_content, include_comments=False, include_tables=True, no_fallback=False
         )
 
         if text and len(text) > 300:
@@ -233,7 +239,9 @@ async def fetch_article_text(url: str) -> str:
             text = soup.get_text(separator="\n", strip=True)
 
         if not text or len(text) < 100:
-            logger.warning("Scraping failed for %s. Trafilatura and BeautifulSoup both returned insufficient content.", url)
+            logger.warning(
+                "Scraping failed for %s. Trafilatura and BeautifulSoup both returned insufficient content.", url
+            )
             return ""
 
         logger.info("Successfully extracted text (len=%d) for %s", len(text), url)
@@ -329,6 +337,7 @@ def assess_content_quality(text: str) -> dict:
 # -------------------------------------------------------------------
 # Step 2: Text Chunking
 # -------------------------------------------------------------------
+
 
 def split_into_chunks(text: str, max_chars: int = 600, overlap_chars: int = 100) -> list[str]:
     """
@@ -486,7 +495,9 @@ async def _prepare_overview_context(url: str) -> str:
         article_text = await fetch_article_text(url)
         cleaned_text = (article_text or "").strip()
         if len(cleaned_text) < 300:
-            raise ValueError(f"Extracted content for '{url}' is too short ({len(cleaned_text)} characters). The article might be behind a paywall or cookie wall.")
+            raise ValueError(
+                f"Extracted content for '{url}' is too short ({len(cleaned_text)} characters). The article might be behind a paywall or cookie wall."
+            )
         chunks = await asyncio.to_thread(semantic_split, cleaned_text, 900, 120)
 
     context = _get_overview_context_from_chunks(chunks)
@@ -516,12 +527,9 @@ async def stream_article_overview(url: str) -> AsyncGenerator[str, None]:
     full_response = ""
     async for chunk in stream:
         if chunk.usage:
-            await metrics_service.record_tokens(
-                chunk.usage.prompt_tokens, 
-                chunk.usage.completion_tokens
-            )
+            await metrics_service.record_tokens(chunk.usage.prompt_tokens, chunk.usage.completion_tokens)
             continue
-            
+
         if chunk.choices and chunk.choices[0].delta.content:
             delta = chunk.choices[0].delta.content
             full_response += delta
@@ -575,6 +583,7 @@ async def generate_article_overview(url: str) -> str:
 # Step 3: Embed & Store in ChromaDB
 # -------------------------------------------------------------------
 
+
 def _collection_name_for(url: str) -> str:
     """Generate a safe collection name from a URL."""
     # ChromaDB collection names must be alphanumeric + hyphens, 3-63 chars
@@ -594,7 +603,7 @@ async def ingest(url: str) -> dict:
     if url in _ingested_urls:
         coll = _get_chroma_client().get_collection(_ingested_urls[url])
         return {"chunks": coll.count(), "quality": cached_quality}
-    
+
     # Fetch and chunk in thread (CPU-bound)
     text = await fetch_article_text(url)
 
@@ -610,14 +619,14 @@ async def ingest(url: str) -> dict:
     _article_quality_cache[url] = quality
 
     chunks = await asyncio.to_thread(semantic_split, text)
-    
+
     if not chunks:
         return {"chunks": 0, "quality": quality}
-    
+
     # Generate embeddings
     bi_encoder = get_bi_encoder()
     embeddings = await asyncio.to_thread(bi_encoder.encode, chunks, show_progress_bar=False)
-    
+
     # Store in ChromaDB
     collection_name = _collection_name_for(url)
     # Delete old collection if it exists
@@ -625,10 +634,9 @@ async def ingest(url: str) -> dict:
         _get_chroma_client().delete_collection(collection_name)
     except Exception:
         pass
-    
+
     collection = _get_chroma_client().create_collection(
-        name=collection_name, 
-        metadata={"url": url, "ingested_at": datetime.now(UTC).isoformat()}
+        name=collection_name, metadata={"url": url, "ingested_at": datetime.now(UTC).isoformat()}
     )
     collection.add(
         ids=[str(uuid.uuid4()) for _ in chunks],
@@ -638,7 +646,7 @@ async def ingest(url: str) -> dict:
 
     _ingested_urls[url] = collection_name
     _bm25_indices[url] = _build_bm25_index(chunks)
-    
+
     return {"chunks": len(chunks), "quality": quality}
 
 
@@ -671,9 +679,9 @@ async def delete_collections_by_urls(urls: list[str]) -> int:
 # Retrieval pipeline (delegated to _retrieval.py)
 # -------------------------------------------------------------------
 # Re-export for backward compatibility — existing imports via _core still work.
-from app.services.rag._retrieval import (  # noqa: F401
-    query_stream,
-    query_cross_article,
-    _build_rag_prompt,
+from app.services.rag._retrieval import (  # noqa: E402,F401
     _build_cross_article_prompt,
+    _build_rag_prompt,
+    query_cross_article,
+    query_stream,
 )

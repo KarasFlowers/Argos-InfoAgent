@@ -6,6 +6,7 @@ from the ``app.services.llm`` subpackage so that all existing imports::
 
 continue to work without changes.
 """
+
 from app.services.llm import LLMService, llm_service  # noqa: F401
 
 __all__ = ["LLMService", "llm_service"]

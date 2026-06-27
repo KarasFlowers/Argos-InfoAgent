@@ -20,6 +20,7 @@ scoring/summarisation pipeline. Two layers:
 This keeps the filter lightweight while still allowing the LLM to make nuanced
 decisions about borderline items.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 class InterestFilter:
     """Stateless interest-based content filter."""
 
-    def __init__(self, personas: list["UserPersona"]):
+    def __init__(self, personas: list[UserPersona]):
         self._personas = personas
         self._block_patterns: list[re.Pattern] = []
         self._boost_keywords: list[str] = []
@@ -69,6 +70,7 @@ class InterestFilter:
             return False
         try:
             from app.services.rag_service import get_bi_encoder
+
             bi_encoder = get_bi_encoder()
             self._focus_embeddings = bi_encoder.encode(self._focus_texts)
             logger.debug("Computed %d focus embeddings for interest filter", len(self._focus_texts))
@@ -77,7 +79,7 @@ class InterestFilter:
             logger.debug("Bi-Encoder not available for interest filter, using keyword fallback: %s", exc)
             return False
 
-    def filter_items(self, items: list["ContentItem"]) -> list["ContentItem"]:
+    def filter_items(self, items: list[ContentItem]) -> list[ContentItem]:
         """
         Apply pre-filter:
         - Remove items whose title matches any block_topic pattern.
@@ -111,9 +113,10 @@ class InterestFilter:
 
         return kept
 
-    def _sort_by_embedding_similarity(self, items: list["ContentItem"]) -> list["ContentItem"]:
+    def _sort_by_embedding_similarity(self, items: list[ContentItem]) -> list[ContentItem]:
         """Sort items by cosine similarity to focus embeddings (descending)."""
         from app.services.rag_service import get_bi_encoder
+
         bi_encoder = get_bi_encoder()
 
         texts = []
@@ -127,7 +130,7 @@ class InterestFilter:
         item_embeddings = bi_encoder.encode(texts)
         # Compute max similarity across all focus embeddings for each item
         scores = []
-        for i, emb in enumerate(item_embeddings):
+        for _i, emb in enumerate(item_embeddings):
             emb_norm = emb / (np.linalg.norm(emb) + 1e-9)
             max_sim = 0.0
             for focus_emb in self._focus_embeddings:
@@ -137,13 +140,14 @@ class InterestFilter:
                     max_sim = sim
             scores.append(-max_sim)  # negative for descending sort
 
-        paired = list(zip(scores, items))
+        paired = list(zip(scores, items, strict=False))
         paired.sort(key=lambda x: x[0])
         return [item for _, item in paired]
 
-    def _sort_by_keyword_boost(self, items: list["ContentItem"]) -> list["ContentItem"]:
+    def _sort_by_keyword_boost(self, items: list[ContentItem]) -> list[ContentItem]:
         """Sort items by keyword match score (descending)."""
-        def _boost_score(item: "ContentItem") -> int:
+
+        def _boost_score(item: ContentItem) -> int:
             title_lower = (item.title or "").lower()
             content_lower = (item.content or "")[:200].lower()
             score = 0
@@ -191,6 +195,6 @@ class InterestFilter:
         )
 
 
-def build_interest_filter(personas: list["UserPersona"]) -> InterestFilter:
+def build_interest_filter(personas: list[UserPersona]) -> InterestFilter:
     """Factory helper."""
     return InterestFilter(personas)

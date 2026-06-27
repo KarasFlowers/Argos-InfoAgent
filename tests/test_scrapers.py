@@ -4,19 +4,18 @@ test_scrapers.py - Unit tests for HN, Reddit, GitHub scrapers.
 Uses mocked HTTP responses so no real network calls are made.
 """
 
-import asyncio
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 import httpx
+import pytest
 
 from app.models.schemas import ContentItem
-
 
 # ---------------------------------------------------------------------------
 # Hacker News
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def hn_config():
@@ -35,7 +34,7 @@ async def test_hn_scraper_returns_content_items(hn_config):
         "title": "Test Story",
         "url": "https://example.com/test",
         "by": "author",
-        "time": int(datetime.now(timezone.utc).timestamp()),
+        "time": int(datetime.now(UTC).timestamp()),
         "score": 200,
         "descendants": 5,
         "kids": [10],
@@ -45,7 +44,7 @@ async def test_hn_scraper_returns_content_items(hn_config):
         "type": "comment",
         "by": "commenter",
         "text": "Great article!",
-        "time": int(datetime.now(timezone.utc).timestamp()),
+        "time": int(datetime.now(UTC).timestamp()),
     }
 
     async def mock_get(url, **kwargs):
@@ -66,7 +65,7 @@ async def test_hn_scraper_returns_content_items(hn_config):
     client.get = mock_get
 
     scraper = HackerNewsScraper(hn_config, client)
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     items = await scraper.fetch(since)
 
     assert len(items) >= 1
@@ -91,7 +90,7 @@ async def test_hn_scraper_empty_when_no_stories(hn_config):
     client.get = mock_get
 
     scraper = HackerNewsScraper(hn_config, client)
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     items = await scraper.fetch(since)
     assert items == []
 
@@ -99,6 +98,7 @@ async def test_hn_scraper_empty_when_no_stories(hn_config):
 # ---------------------------------------------------------------------------
 # Reddit
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def reddit_config():
@@ -127,7 +127,7 @@ async def test_reddit_scraper_returns_content_items(reddit_config):
                         "url": "https://python.org/4",
                         "selftext": "Big update!",
                         "author": "guido",
-                        "created_utc": datetime.now(timezone.utc).timestamp(),
+                        "created_utc": datetime.now(UTC).timestamp(),
                         "score": 999,
                         "upvote_ratio": 0.98,
                         "num_comments": 50,
@@ -174,7 +174,7 @@ async def test_reddit_scraper_returns_content_items(reddit_config):
     client.get = mock_get
 
     scraper = RedditScraper(reddit_config, client)
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     items = await scraper.fetch(since)
 
     assert len(items) >= 1
@@ -185,6 +185,7 @@ async def test_reddit_scraper_returns_content_items(reddit_config):
 # ---------------------------------------------------------------------------
 # GitHub
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def github_config():
@@ -205,12 +206,8 @@ async def test_github_scraper_returns_content_items(github_config):
             "id": "evt1",
             "type": "PushEvent",
             "repo": {"name": "octocat/hello-world"},
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "payload": {
-                "commits": [
-                    {"message": "Initial commit", "sha": "abc123"}
-                ]
-            },
+            "created_at": datetime.now(UTC).isoformat(),
+            "payload": {"commits": [{"message": "Initial commit", "sha": "abc123"}]},
         }
     ]
 
@@ -225,7 +222,7 @@ async def test_github_scraper_returns_content_items(github_config):
     client.get = mock_get
 
     scraper = GitHubScraper(github_config, client)
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     items = await scraper.fetch(since)
 
     assert len(items) >= 1
@@ -250,6 +247,6 @@ async def test_github_scraper_empty_when_no_events(github_config):
     client.get = mock_get
 
     scraper = GitHubScraper(github_config, client)
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     items = await scraper.fetch(since)
     assert items == []

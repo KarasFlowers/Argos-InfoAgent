@@ -12,8 +12,10 @@
 - [ ] Chore / tooling
 
 ## Checklist
-- [ ] Tests pass locally (`pytest tests/`)
-- [ ] Lint passes (`ruff check . && ruff format --check .`)
+- [ ] Local release gate passes (`python scripts/check_release.py`)
+- [ ] Frontend request/auth changes validated (`node --check app/web/static/app.js && node scripts/frontend_auth_smoke.js`)
 - [ ] Added/updated tests for the change
 - [ ] Updated relevant documentation
+- [ ] Runtime smoke passes when API/auth/startup behavior changes (`python scripts/runtime_smoke.py`)
+- [ ] Docker/deployment changes validated (`docker compose config --quiet`; run `python scripts/docker_smoke.py` when Docker daemon is available)
 - [ ] No secrets or credentials committed

@@ -9,17 +9,60 @@ REM Locate project root (one level up from scripts/)
 for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
 cd /d "%PROJECT_ROOT%"
 
-REM --- 1) venv sanity check ---------------------------------------------
-if not exist "%PROJECT_ROOT%\venv\Scripts\Activate.ps1" (
-    echo [ERROR] Virtual environment not found at: %PROJECT_ROOT%\venv
-    echo Please run:
-    echo    python -m venv venv
-    echo    venv\Scripts\activate ^&^& pip install -r requirements.txt
+REM --- 1) Ensure venv and dependencies ----------------------------------
+set "PYTHON_EXE="
+where py > nul 2>&1
+if not errorlevel 1 set "PYTHON_EXE=py -3"
+if "%PYTHON_EXE%"=="" (
+    where python > nul 2>&1
+    if not errorlevel 1 set "PYTHON_EXE=python"
+)
+if "%PYTHON_EXE%"=="" (
+    echo [ERROR] Python 3.11+ not found. Please install Python first.
     pause
     exit /b 1
 )
 
-REM --- 2) port-in-use shortcut ------------------------------------------
+if not exist "%PROJECT_ROOT%\venv\Scripts\python.exe" (
+    echo [INFO] Creating virtual environment...
+    %PYTHON_EXE% -m venv "%PROJECT_ROOT%\venv"
+    if errorlevel 1 (
+        echo [ERROR] Failed to create virtual environment.
+        pause
+        exit /b 1
+    )
+)
+
+if not exist "%PROJECT_ROOT%\venv\Scripts\uvicorn.exe" (
+    echo [INFO] Installing dependencies. This may take a few minutes on first run...
+    "%PROJECT_ROOT%\venv\Scripts\python.exe" -m pip install --upgrade pip
+    if errorlevel 1 (
+        echo [ERROR] Failed to upgrade pip.
+        pause
+        exit /b 1
+    )
+    "%PROJECT_ROOT%\venv\Scripts\python.exe" -m pip install -r "%PROJECT_ROOT%\requirements.txt"
+    if errorlevel 1 (
+        echo [ERROR] Failed to install requirements.
+        pause
+        exit /b 1
+    )
+)
+
+REM --- 2) Auto-generate .env if missing ---------------------------------
+if not exist "%PROJECT_ROOT%\.env" (
+    echo [WARN] .env file not found.
+    copy "%PROJECT_ROOT%\.env.template" "%PROJECT_ROOT%\.env" > nul
+    set /p "ARGOS_FIRST_RUN_LLM_API_KEY=LLM_API_KEY (blank to edit .env later): "
+    if not "%ARGOS_FIRST_RUN_LLM_API_KEY%"=="" (
+        powershell.exe -NoProfile -Command "$p = '%PROJECT_ROOT%\.env'; $key = $env:ARGOS_FIRST_RUN_LLM_API_KEY; $text = Get-Content -Raw -Path $p; $text = $text.Replace('# LLM_API_KEY=\"sk-your-api-key-here\"', ('LLM_API_KEY=\"' + $key + '\"')); Set-Content -Path $p -Value $text -NoNewline"
+        echo [OK] .env created with your API key.
+    ) else (
+        echo [WARN] .env created from template. Please edit it to add your LLM_API_KEY.
+    )
+)
+
+REM --- 3) port-in-use shortcut ------------------------------------------
 netstat -ano | findstr /r /c:":8000 .*LISTENING" > nul 2>&1
 if not errorlevel 1 (
     echo [INFO] Port 8000 is already in use. Opening the existing dashboard...
@@ -29,19 +72,19 @@ if not errorlevel 1 (
     exit /b 0
 )
 
-REM --- 3) Ensure Redis is running (idempotent) --------------------------
+REM --- 4) Ensure Redis is running (idempotent) --------------------------
 echo Ensuring local Redis is running...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_ROOT%\scripts\setup_redis.ps1" > nul 2>&1
 if errorlevel 1 (
     echo [WARN] Redis setup script failed. The app will still run, but caching will be disabled.
 )
 
-REM --- 4) Start backend in a visible window -----------------------------
+REM --- 5) Start backend in a visible window -----------------------------
 echo Starting Argos backend...
 start "Argos Backend" powershell.exe -NoExit -ExecutionPolicy Bypass -Command ^
     "& '%PROJECT_ROOT%\venv\Scripts\Activate.ps1'; Set-Location '%PROJECT_ROOT%'; uvicorn main:app --reload"
 
-REM --- 5) Poll /api/v1/ping until healthy (max ~30s) --------------------
+REM --- 6) Poll /api/v1/ping until healthy (max ~30s) --------------------
 echo Waiting for server to become healthy...
 set /a _tries=0
 :WAIT_LOOP

@@ -1,8 +1,10 @@
 """Summary repository — read/write operations for DailySummary + NewsItem."""
+
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete as sa_delete, desc, and_, or_, func
+from sqlalchemy import and_, desc, func, or_
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -13,12 +15,15 @@ from app.models.domain import (
     ChatMessage,
     DailySummary,
     NewsItem,
-    SummaryViewLog,
     UserFeedback,
 )
 from app.models.schemas import (
-    DailySummaryResponse, HistoryStatItem, SummaryArchiveItem,
-    SummaryHistoryResponse, SummaryItem, WeeklyRecapResponse,
+    DailySummaryResponse,
+    HistoryStatItem,
+    SummaryArchiveItem,
+    SummaryHistoryResponse,
+    SummaryItem,
+    WeeklyRecapResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,7 +103,7 @@ class SummaryRepo:
             perspective=db_summary.perspective or "overview",
             top_news=top_news,
             source_stats=stats,
-            recommendation_report=db_summary.stats_json if isinstance(db_summary.stats_json, dict) else {}
+            recommendation_report=db_summary.stats_json if isinstance(db_summary.stats_json, dict) else {},
         )
 
     async def get_recent_article_urls(
@@ -109,27 +114,26 @@ class SummaryRepo:
     ) -> set[str]:
         today = datetime.now().strftime("%Y-%m-%d")
         cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        stmt = (
-            select(DailySummary.id)
-            .where(DailySummary.date >= cutoff, DailySummary.date < today)
-        )
+        stmt = select(DailySummary.id).where(DailySummary.date >= cutoff, DailySummary.date < today)
         if board_id is not None:
             stmt = stmt.where(DailySummary.board_id == board_id)
         result = await session.execute(stmt)
         summary_ids = list(result.scalars().all())
         if not summary_ids:
             return set()
-        news_stmt = select(NewsItem.original_link).where(
-            NewsItem.summary_id.in_(summary_ids)
-        )
+        news_stmt = select(NewsItem.original_link).where(NewsItem.summary_id.in_(summary_ids))
         news_result = await session.execute(news_stmt)
         return set(news_result.scalars().all())
 
-    async def get_summary_archive(self, session: AsyncSession, limit: int = 7, board_id: int | None = None) -> list[SummaryArchiveItem]:
+    async def get_summary_archive(
+        self, session: AsyncSession, limit: int = 7, board_id: int | None = None
+    ) -> list[SummaryArchiveItem]:
         history = await self.get_summary_history(session, limit=limit, board_id=board_id)
         return history.archive_items
 
-    async def get_summary_history(self, session: AsyncSession, limit: int = 7, board_id: int | None = None) -> SummaryHistoryResponse:
+    async def get_summary_history(
+        self, session: AsyncSession, limit: int = 7, board_id: int | None = None
+    ) -> SummaryHistoryResponse:
         statement = select(DailySummary)
         if board_id is not None:
             statement = statement.where(DailySummary.board_id == board_id)
@@ -286,7 +290,7 @@ class SummaryRepo:
             board_id=board_id,
             perspective=summary.perspective or "overview",
             overview=summary.overview,
-            stats_json=summary.recommendation_report if summary.recommendation_report else None
+            stats_json=summary.recommendation_report if summary.recommendation_report else None,
         )
         session.add(db_summary)
         await session.flush()
@@ -314,6 +318,7 @@ class SummaryRepo:
 
         try:
             from app.services.clustering_service import assign_clusters
+
             await assign_clusters(persisted_news, board_id=board_id, session=session, commit=False)
         except Exception as exc:
             logger.debug("Cluster assignment skipped for %s: %s", summary.date, exc)
@@ -341,29 +346,18 @@ class SummaryRepo:
                     )
         await session.commit()
 
-    async def get_unviewed_dates(
-        self, session: AsyncSession, limit: int = 7
-    ) -> list[str]:
+    async def get_unviewed_dates(self, session: AsyncSession, limit: int = 7) -> list[str]:
         """Return dates that still have unread articles."""
         if hasattr(self, "get_unread_dates"):
             return await self.get_unread_dates(session, None, limit=limit)
         return []
 
-    async def get_gap_dates(
-        self, session: AsyncSession, days: int = 7, board_id: int | None = None
-    ) -> list[str]:
+    async def get_gap_dates(self, session: AsyncSession, days: int = 7, board_id: int | None = None) -> list[str]:
         """Return dates within the retention window that have NO DailySummary."""
         today = datetime.now()
-        all_dates = [
-            (today - timedelta(days=d)).strftime("%Y-%m-%d")
-            for d in range(1, days + 1)
-        ]
+        all_dates = [(today - timedelta(days=d)).strftime("%Y-%m-%d") for d in range(1, days + 1)]
         # Dates that DO have a summary
-        stmt = (
-            select(DailySummary.date)
-            .where(DailySummary.date.in_(all_dates))
-            .group_by(DailySummary.date)
-        )
+        stmt = select(DailySummary.date).where(DailySummary.date.in_(all_dates)).group_by(DailySummary.date)
         if board_id is not None:
             stmt = stmt.where(DailySummary.board_id == board_id)
         result = await session.execute(stmt)
@@ -374,12 +368,7 @@ class SummaryRepo:
         self, session: AsyncSession, limit: int = 14, board_id: int | None = None
     ) -> dict[str, str | None]:
         """Return {date: viewed_at_iso_or_None}; None means at least one unread item."""
-        stmt = (
-            select(DailySummary.date)
-            .group_by(DailySummary.date)
-            .order_by(desc(DailySummary.date))
-            .limit(limit)
-        )
+        stmt = select(DailySummary.date).group_by(DailySummary.date).order_by(desc(DailySummary.date)).limit(limit)
         if board_id is not None:
             stmt = stmt.where(DailySummary.board_id == board_id)
         result = await session.execute(stmt)
@@ -404,7 +393,7 @@ class SummaryRepo:
                     DailySummary.date == date,
                     NewsItem.original_link.is_not(None),
                     NewsItem.original_link != "",
-                    or_(ArticleReadState.id.is_(None), ArticleReadState.is_read == False),
+                    or_(ArticleReadState.id.is_(None), ArticleReadState.is_read.is_(False)),
                 )
             )
             if board_id is not None:
@@ -425,23 +414,23 @@ class SummaryRepo:
             out[date] = read_at.isoformat() if read_at else None
         return out
 
-    async def get_cache_overview(
-        self, session: AsyncSession, limit: int = 14, board_id: int | None = None
-    ) -> dict:
+    async def get_cache_overview(self, session: AsyncSession, limit: int = 14, board_id: int | None = None) -> dict:
         """Return all stored summaries with viewed status for cache viewer."""
         view_map = await self.get_view_status_map(session, limit=limit, board_id=board_id)
         history = await self.get_summary_history(session, limit=limit, board_id=board_id)
 
         items = []
         for arch in history.archive_items:
-            items.append({
-                "date": arch.date,
-                "overview_preview": arch.overview_preview,
-                "news_count": arch.news_count,
-                "source_stats": arch.source_stats,
-                "top_categories": arch.top_categories,
-                "viewed_at": view_map.get(arch.date),
-            })
+            items.append(
+                {
+                    "date": arch.date,
+                    "overview_preview": arch.overview_preview,
+                    "news_count": arch.news_count,
+                    "source_stats": arch.source_stats,
+                    "top_categories": arch.top_categories,
+                    "viewed_at": view_map.get(arch.date),
+                }
+            )
 
         unviewed_count = sum(1 for i in items if i["viewed_at"] is None)
         return {
@@ -478,6 +467,7 @@ class SummaryRepo:
 
         if urls_to_delete:
             from app.services.rag_service import delete_collections_by_urls
+
             await delete_collections_by_urls(urls_to_delete)
 
         if urls_to_delete:

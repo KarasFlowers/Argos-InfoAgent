@@ -21,8 +21,13 @@ PLAN = {"intent": "AI 资讯", "slug": "ai-news", "name": "AI 资讯", "icon": "
 POOL = {
     "source_type": "rss",
     "verified": [
-        {"source_type": "rss", "label": "https://a.com/feed", "url": "https://a.com/feed",
-         "ok": True, "sample_titles": ["标题1", "标题2"]},
+        {
+            "source_type": "rss",
+            "label": "https://a.com/feed",
+            "url": "https://a.com/feed",
+            "ok": True,
+            "sample_titles": ["标题1", "标题2"],
+        },
     ],
 }
 
@@ -53,8 +58,7 @@ class TestWizardFinalize:
         # slug/name absent from BOTH the LLM config and the plan → no valid config.
         # (When the plan has them, finalize intentionally falls back — see next test.)
         mixin = _mixin_with_reply(
-            '{"reply": "x", "config": {"name": "", "slug": "", '
-            '"source_type": "rss", "source_config": {}}}'
+            '{"reply": "x", "config": {"name": "", "slug": "", ' '"source_type": "rss", "source_config": {}}}'
         )
         empty_plan = {"intent": "x", "slug": "", "name": "", "icon": "", "source_type": "rss"}
         with patch("app.services.llm.wizard.settings") as s:
@@ -73,7 +77,7 @@ class TestWizardFinalize:
         with patch("app.services.llm.wizard.settings") as s:
             s.effective_llm_api_key = "sk-test"
             out = await mixin.wizard_finalize(PLAN, POOL)
-        assert out["config"]["slug"] == "ai-news"   # inherited from PLAN
+        assert out["config"]["slug"] == "ai-news"  # inherited from PLAN
         assert out["config"]["name"] == "AI 资讯"
 
     @pytest.mark.anyio

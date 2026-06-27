@@ -36,11 +36,16 @@ Scope is optional but encouraged (`feat(rag): ...`, `fix(api): ...`).
 ## Before you push
 
 ```bash
-ruff check . && ruff format --check .   # lint + format
-pytest tests/                           # tests
+python scripts/check_release.py
 ```
 
-Or install the git hooks so this runs automatically:
+This runs Ruff lint/format, `git diff --check`, frontend syntax and API-key smoke checks, Docker Compose config validation, the full pytest suite, and the local runtime smoke. When a Docker daemon is available and deployment behavior changed, also run:
+
+```bash
+python scripts/check_release.py --with-docker-smoke
+```
+
+You can also install the git hooks for faster local feedback while developing:
 
 ```bash
 pip install pre-commit

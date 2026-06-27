@@ -4,9 +4,10 @@ test_llm_scoring.py - Unit tests for LLM article scoring logic.
 Tests the JSON parsing and score extraction logic without making real LLM calls.
 """
 
-import pytest
 import json
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.services.llm.scoring import ScoringMixin
 
@@ -34,16 +35,19 @@ class FakeScorer(ScoringMixin):
 # Score extraction
 # ---------------------------------------------------------------------------
 
+
 class TestScoreExtraction:
     @pytest.mark.anyio
     async def test_parses_valid_scores(self):
-        response = json.dumps({
-            "scores": [
-                {"index": 0, "score": 8},
-                {"index": 1, "score": 3},
-                {"index": 2, "score": 9},
-            ]
-        })
+        response = json.dumps(
+            {
+                "scores": [
+                    {"index": 0, "score": 8},
+                    {"index": 1, "score": 3},
+                    {"index": 2, "score": 9},
+                ]
+            }
+        )
         scorer = FakeScorer(response)
 
         articles = [
@@ -53,6 +57,7 @@ class TestScoreExtraction:
         ]
 
         from unittest.mock import patch
+
         with patch("app.services.metrics_service.metrics_service") as mock_metrics:
             mock_metrics.record_tokens = AsyncMock()
             mock_metrics.record_latency = AsyncMock()
@@ -67,6 +72,7 @@ class TestScoreExtraction:
 
         articles = [{"title": "Test", "summary": "Test summary"}]
         from unittest.mock import patch
+
         with patch("app.services.metrics_service.metrics_service") as mock_metrics:
             mock_metrics.record_tokens = AsyncMock()
             mock_metrics.record_latency = AsyncMock()
@@ -81,6 +87,7 @@ class TestScoreExtraction:
 
         articles = [{"title": "Test", "summary": "Test"}]
         from unittest.mock import patch
+
         with patch("app.services.metrics_service.metrics_service") as mock_metrics:
             mock_metrics.record_tokens = AsyncMock()
             mock_metrics.record_latency = AsyncMock()
@@ -99,9 +106,9 @@ class TestScoreExtraction:
             {"title": "Bad article", "summary": "Meh"},
         ]
         from unittest.mock import patch
+
         with patch("app.services.metrics_service.metrics_service") as mock_metrics:
             mock_metrics.record_tokens = AsyncMock()
             mock_metrics.record_latency = AsyncMock()
             result = await scorer._score_articles(articles)
         assert isinstance(result, tuple)
-

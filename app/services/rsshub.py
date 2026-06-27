@@ -8,6 +8,7 @@ an RSSHub URL is just another feed.
 This module is pure data + pure functions (no network). The base URL is
 configurable so a self-hosted instance can be swapped in via RSSHUB_BASE_URL.
 """
+
 from __future__ import annotations
 
 import logging
@@ -80,6 +81,7 @@ DEFAULT_BASE_URL = "https://rsshub.app"
 def _base_url() -> str:
     """Resolve the configured RSSHub base URL (trailing slash stripped)."""
     from app.core.config import settings
+
     base = getattr(settings, "RSSHUB_BASE_URL", None) or DEFAULT_BASE_URL
     return base.rstrip("/")
 

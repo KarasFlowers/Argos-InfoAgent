@@ -12,7 +12,6 @@ import logging
 import threading
 from collections import OrderedDict
 from functools import lru_cache
-from typing import Optional
 
 from app.core.config import settings
 
@@ -22,6 +21,7 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------
 # Bounded LRU Cache
 # -------------------------------------------------------------------
+
 
 class _BoundedLRU(OrderedDict):
     """Minimal dict-like bounded LRU cache. Evicts oldest entry once full.
@@ -62,14 +62,16 @@ class _BoundedLRU(OrderedDict):
 # RAG availability check
 # -------------------------------------------------------------------
 
+
 def is_rag_available() -> bool:
     """Return True if RAG is enabled AND the required packages are installed."""
     if not settings.RAG_ENABLED:
         return False
     try:
-        import sentence_transformers  # noqa: F401
         import chromadb  # noqa: F401
         import rank_bm25  # noqa: F401
+        import sentence_transformers  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -80,9 +82,7 @@ def _require_rag() -> None:
     if not settings.RAG_ENABLED:
         raise RuntimeError("RAG feature is disabled. Set RAG_ENABLED=true to enable.")
     if not is_rag_available():
-        raise RuntimeError(
-            "RAG dependencies not installed. Run: pip install -r requirements-rag.txt"
-        )
+        raise RuntimeError("RAG dependencies not installed. Run: pip install -r requirements-rag.txt")
 
 
 def _reset_hf_http_client() -> None:
@@ -98,6 +98,7 @@ def _reset_hf_http_client() -> None:
     """
     try:
         import huggingface_hub
+
         # huggingface_hub >= 0.24 exposes an official API
         if hasattr(huggingface_hub, "configure_http_backend"):
             huggingface_hub.configure_http_backend(backend=None)
@@ -108,6 +109,7 @@ def _reset_hf_http_client() -> None:
     try:
         # Fallback for older versions: reset the internal module attribute
         from huggingface_hub.utils import _http as hf_http
+
         for attr in ("_global_client", "_http_client"):
             if hasattr(hf_http, attr):
                 setattr(hf_http, attr, None)
@@ -120,11 +122,13 @@ def _reset_hf_http_client() -> None:
 # Model Loading (cached, loaded once at startup)
 # -------------------------------------------------------------------
 
+
 @lru_cache(maxsize=1)
 def get_bi_encoder():
     """Load the Bi-Encoder for generating embeddings. Cached after first call."""
     _require_rag()
     from sentence_transformers import SentenceTransformer
+
     logger.info("Loading Bi-Encoder model (BAAI/bge-m3)")
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -134,7 +138,8 @@ def get_bi_encoder():
             if "client has been closed" in str(exc) and attempt < max_retries:
                 logger.warning(
                     "huggingface_hub httpx client closed (attempt %d/%d), resetting and retrying",
-                    attempt, max_retries,
+                    attempt,
+                    max_retries,
                 )
                 _reset_hf_http_client()
                 continue
@@ -146,6 +151,7 @@ def get_cross_encoder():
     """Load the Cross-Encoder for reranking. Cached after first call."""
     _require_rag()
     from sentence_transformers import CrossEncoder
+
     logger.info("Loading Cross-Encoder rerank model")
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -155,7 +161,8 @@ def get_cross_encoder():
             if "client has been closed" in str(exc) and attempt < max_retries:
                 logger.warning(
                     "huggingface_hub httpx client closed (attempt %d/%d), resetting and retrying",
-                    attempt, max_retries,
+                    attempt,
+                    max_retries,
                 )
                 _reset_hf_http_client()
                 continue
@@ -191,13 +198,16 @@ def _build_persistent_client():
     failure, logging the underlying error so it isn't swallowed.
     """
     import chromadb
+
     try:
         return chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
     except Exception as exc:
         from chromadb.api.shared_system_client import SharedSystemClient
+
         logger.warning(
-            "ChromaDB client construction failed (%s: %s); clearing shared-system "
-            "cache and retrying once", type(exc).__name__, exc,
+            "ChromaDB client construction failed (%s: %s); clearing shared-system " "cache and retrying once",
+            type(exc).__name__,
+            exc,
         )
         try:
             SharedSystemClient.clear_system_cache()
@@ -292,6 +302,7 @@ _content_fallback: _BoundedLRU = _BoundedLRU(maxsize=256)
 # -------------------------------------------------------------------
 # ChromaDB initialisation
 # -------------------------------------------------------------------
+
 
 def prewarm_models() -> None:
     """Pre-load Bi-Encoder and Cross-Encoder models into memory.

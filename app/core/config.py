@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,7 +25,7 @@ def _resolve_sqlite_uri(value: str) -> str:
     if not value.startswith(prefix):
         return value
 
-    db_path = value[len(prefix):]
+    db_path = value[len(prefix) :]
     if not db_path:
         return value
 
@@ -35,13 +36,52 @@ def _resolve_sqlite_uri(value: str) -> str:
     return f"{prefix}{resolved.as_posix()}"
 
 
+def _validate_http_base_url(value: str, *, field_name: str) -> str:
+    raw = (value or "").strip().rstrip("/")
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{field_name} must be an absolute http(s) URL")
+    if parsed.params or parsed.query or parsed.fragment:
+        raise ValueError(f"{field_name} must not include params, query, or fragment")
+    return raw
+
+
+def _validate_cors_origin(value: str) -> str:
+    raw = value.strip().rstrip("/")
+    if raw == "*":
+        return raw
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"CORS origin must be an absolute http(s) origin: {value!r}")
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError(f"CORS origin must not include path, params, query, or fragment: {value!r}")
+    return raw
+
+
+def effective_cors_allow_credentials(origins: list[str], requested: bool) -> bool:
+    """Return the safe effective CORS credentials flag for Starlette."""
+    return requested and "*" not in origins
+
+
+def _validate_hhmm_time(value: str, *, field_name: str) -> str:
+    raw = (value or "").strip()
+    parts = raw.split(":")
+    if len(parts) != 2 or not all(part.isdigit() and len(part) == 2 for part in parts):
+        raise ValueError(f"{field_name} must use HH:MM format")
+    hour, minute = (int(part) for part in parts)
+    if hour > 23 or minute > 59:
+        raise ValueError(f"{field_name} must be a valid 24-hour time")
+    return raw
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
     PROJECT_NAME: str = "Argos"
     VERSION: str = "0.1.0"
     API_V1_STR: str = "/api/v1"
-    
+    PUBLIC_BASE_URL: str = "http://localhost:8000"
+
     # RSS feeds — must be freely accessible (no paywall) for RAG to scrape full text
     RSS_FEEDS: list[str] = [
         "https://news.ycombinator.com/rss",
@@ -55,7 +95,7 @@ class Settings(BaseSettings):
         "https://www.solidot.org/index.rss",
         "https://36kr.com/feed",
     ]
-    
+
     # LLM Configuration — generic provider settings
     LLM_MODEL: str = "deepseek-chat"
     LLM_API_KEY: str | None = None
@@ -102,13 +142,13 @@ class Settings(BaseSettings):
         if self.LLM_API_KEY:
             return self.LLM_BASE_URL or None
         return self.LLM_BASE_URL or self.DEEPSEEK_BASE_URL
-    
+
     # Database
     SQLALCHEMY_DATABASE_URI: str = "sqlite+aiosqlite:///./data/sqlite/argos.db"
-    
+
     # Retention Policy
     HISTORY_DAYS_TO_KEEP: int = 7
-    
+
     # Email Push Settings
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 465
@@ -118,9 +158,10 @@ class Settings(BaseSettings):
     EMAIL_SUBSCRIBERS: list[str] = []
     DAILY_PUSH_TIME: str = "08:00"  # Format HH:MM
 
-    # Notification (email only)
-    NOTIFY_CHANNELS: str = "email"
-    
+    # Notification channels. Empty by default to avoid external side effects;
+    # set to "email" (or comma-separated channels) to enable scheduled pushes.
+    NOTIFY_CHANNELS: str = ""
+
     # RAG Feature Toggle (set to false to skip heavy model downloads)
     RAG_ENABLED: bool = True
 
@@ -145,20 +186,20 @@ class Settings(BaseSettings):
     RAG_HYDE_ENABLED: bool = True
 
     # --- Web Search (Tavily) ---
-    TAVILY_API_KEY: str | None = None             # Optional: enables web search in Deep Research
+    TAVILY_API_KEY: str | None = None  # Optional: enables web search in Deep Research
 
     # --- Weekly report theme enrichment ---
     # When enabled (and TAVILY_API_KEY is set), the weekly report runs an extra
     # stage that web-searches the top themes and injects structured background
     # into the editorial. Off by default — daily summary flow is unaffected.
     WEEKLY_ENRICH_ENABLED: bool = False
-    WEEKLY_ENRICH_MAX_THEMES: int = 3             # How many top themes to enrich per weekly run
+    WEEKLY_ENRICH_MAX_THEMES: int = 3  # How many top themes to enrich per weekly run
 
     # --- Multi-source scraper defaults ---
-    GITHUB_TOKEN: str | None = None               # Optional: raises GitHub API rate limit
-    HN_FETCH_TOP_STORIES: int = 30                # Hacker News: how many top stories to fetch
-    HN_MIN_SCORE: int = 100                       # Hacker News: minimum score filter
-    REDDIT_FETCH_COMMENTS: int = 5                # Reddit: top comments per post
+    GITHUB_TOKEN: str | None = None  # Optional: raises GitHub API rate limit
+    HN_FETCH_TOP_STORIES: int = 30  # Hacker News: how many top stories to fetch
+    HN_MIN_SCORE: int = 100  # Hacker News: minimum score filter
+    REDDIT_FETCH_COMMENTS: int = 5  # Reddit: top comments per post
 
     # Redis Cache
     REDIS_URL: str = "redis://localhost:6379"
@@ -205,5 +246,21 @@ class Settings(BaseSettings):
                 return json.loads(raw)
             return [origin.strip() for origin in raw.split(",") if origin.strip()]
         return value
+
+    @field_validator("PUBLIC_BASE_URL", "RSSHUB_BASE_URL")
+    @classmethod
+    def validate_public_http_base_url(cls, value: str, info) -> str:
+        return _validate_http_base_url(value, field_name=info.field_name)
+
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def validate_cors_origins(cls, value: list[str]) -> list[str]:
+        return [_validate_cors_origin(origin) for origin in value]
+
+    @field_validator("DAILY_PUSH_TIME")
+    @classmethod
+    def validate_daily_push_time(cls, value: str) -> str:
+        return _validate_hhmm_time(value, field_name="DAILY_PUSH_TIME")
+
 
 settings = Settings()

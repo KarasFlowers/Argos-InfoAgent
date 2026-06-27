@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from openai import AsyncOpenAI
 
+from app.core.llm_config import parse_tier_spec
+
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion
 
@@ -92,7 +94,9 @@ class CircuitBreaker:
                 self._opened_at[key] = now
                 logger.warning(
                     "CircuitBreaker OPEN for %s (failures=%d in last %.0fs)",
-                    key, len(self._failures[key]), self._window_seconds,
+                    key,
+                    len(self._failures[key]),
+                    self._window_seconds,
                 )
 
     def reset(self, base_url: str | None = None, model: str | None = None) -> None:
@@ -106,8 +110,6 @@ class CircuitBreaker:
                 self._failures.clear()
                 self._opened_at.clear()
 
-
-from app.core.llm_config import parse_tier_spec
 
 # Backward-compatible alias for any external imports of the private name
 _parse_tier_spec = parse_tier_spec
@@ -202,9 +204,7 @@ class LLMClient:
             )
             self._tier_clients[tier] = client
             self._tier_models[tier] = model
-            logger.info(
-                "LLMClient tier '%s' → model=%s base_url=%s", tier, model, base_url
-            )
+            logger.info("LLMClient tier '%s' → model=%s base_url=%s", tier, model, base_url)
 
         return self._tier_clients[tier], self._tier_models[tier]
 
@@ -262,9 +262,7 @@ class LLMClient:
             return True
         return False
 
-    async def _create_with_fallback(
-        self, client: AsyncOpenAI, cap_key: str, messages: list, kwargs: dict[str, Any]
-    ):
+    async def _create_with_fallback(self, client: AsyncOpenAI, cap_key: str, messages: list, kwargs: dict[str, Any]):
         """Call ``chat.completions.create``; on a recoverable parameter
         rejection, adjust kwargs and retry. The absorbed error is not a circuit
         failure — only an unrecoverable error (or a still-failing call after all
@@ -293,7 +291,7 @@ class LLMClient:
         tier: TierName | None = None,
         label: str = "",
         **kwargs: Any,
-    ) -> "ChatCompletion":
+    ) -> ChatCompletion:
         """Non-streaming chat completion.
 
         Automatically injects ``model`` and records token metrics.
@@ -321,9 +319,7 @@ class LLMClient:
         self._apply_capability_adjustments(cap_key, kwargs)
         start = time.time()
         try:
-            response = await self._create_with_fallback(
-                client, cap_key, messages, kwargs
-            )
+            response = await self._create_with_fallback(client, cap_key, messages, kwargs)
         except Exception:
             self._circuit_breaker.record_failure(base_url, model)
             raise
@@ -370,9 +366,7 @@ class LLMClient:
         cap_key = self._cap_key(base_url, model)
         self._apply_capability_adjustments(cap_key, kwargs)
         try:
-            return await self._create_with_fallback(
-                client, cap_key, messages, kwargs
-            )
+            return await self._create_with_fallback(client, cap_key, messages, kwargs)
         except Exception:
             self._circuit_breaker.record_failure(base_url, model)
             raise
@@ -390,4 +384,5 @@ class LLMClient:
 
 class CircuitOpenError(Exception):
     """Raised when the circuit breaker is OPEN and the call is rejected."""
+
     pass

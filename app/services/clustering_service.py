@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -83,13 +83,9 @@ async def assign_clusters(
         best_score = 0.0
 
         if embedder and cluster_titles:
-            best_cluster_id, best_score = _find_best_cluster_embedding(
-                item.headline, cluster_titles, embedder
-            )
+            best_cluster_id, best_score = _find_best_cluster_embedding(item.headline, cluster_titles, embedder)
         elif cluster_titles:
-            best_cluster_id, best_score = _find_best_cluster_overlap(
-                item.headline, cluster_titles
-            )
+            best_cluster_id, best_score = _find_best_cluster_overlap(item.headline, cluster_titles)
 
         if best_cluster_id and best_score >= _CLUSTER_THRESHOLD:
             assignments[item.id] = best_cluster_id
@@ -157,9 +153,7 @@ async def assign_clusters(
             await session.rollback()
             logger.info("Duplicate cluster fingerprint detected, merging")
             for cluster in new_clusters:
-                existing_stmt = select(ContentCluster).where(
-                    ContentCluster.fingerprint == cluster.fingerprint
-                )
+                existing_stmt = select(ContentCluster).where(ContentCluster.fingerprint == cluster.fingerprint)
                 if board_id is not None:
                     existing_stmt = existing_stmt.where(ContentCluster.board_id == board_id)
                 ex_result = await session.execute(existing_stmt)
@@ -191,7 +185,9 @@ async def assign_clusters(
 
     logger.info(
         "Clustering: %d items -> %d assignments (%d new clusters)",
-        len(items), len(assignments), len(new_clusters),
+        len(items),
+        len(assignments),
+        len(new_clusters),
     )
     return assignments
 
@@ -203,9 +199,12 @@ async def get_clusters_for_board(
     limit: int = 20,
 ) -> list[ContentCluster]:
     """Retrieve clusters for a board, sorted by item_count descending."""
-    stmt = select(ContentCluster).where(
-        ContentCluster.item_count >= min_items
-    ).order_by(ContentCluster.item_count.desc()).limit(limit)
+    stmt = (
+        select(ContentCluster)
+        .where(ContentCluster.item_count >= min_items)
+        .order_by(ContentCluster.item_count.desc())
+        .limit(limit)
+    )
 
     if board_id is not None:
         stmt = stmt.where(ContentCluster.board_id == board_id)
@@ -218,6 +217,7 @@ def _get_embedder():
     """Try to get the Bi-Encoder for similarity computation."""
     try:
         from app.services.rag._core import get_bi_encoder
+
         return get_bi_encoder()
     except Exception:
         return None
@@ -244,6 +244,7 @@ def _find_best_cluster_embedding(
 
         # Cosine similarity (embeddings are normalized)
         import numpy as np
+
         scores = np.dot(cluster_embs, query_emb)
 
         best_idx = int(np.argmax(scores))

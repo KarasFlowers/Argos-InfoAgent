@@ -2,13 +2,13 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
-from app.scrapers.base import BaseScraper
 from app.models.schemas import ContentItem
+from app.scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
@@ -88,14 +88,8 @@ class RedditScraper(BaseScraper):
         if not data:
             return []
 
-        posts = [
-            child["data"]
-            for child in data.get("data", {}).get("children", [])
-            if child.get("kind") == "t3"
-        ]
-        return await self._process_posts(
-            posts, since, "subreddit", cfg["subreddit"], cfg.get("min_score", 10)
-        )
+        posts = [child["data"] for child in data.get("data", {}).get("children", []) if child.get("kind") == "t3"]
+        return await self._process_posts(posts, since, "subreddit", cfg["subreddit"], cfg.get("min_score", 10))
 
     async def _fetch_user(self, cfg: dict, since: datetime) -> list[ContentItem]:
         params: dict[str, Any] = {
@@ -108,11 +102,7 @@ class RedditScraper(BaseScraper):
         if not data:
             return []
 
-        posts = [
-            child["data"]
-            for child in data.get("data", {}).get("children", [])
-            if child.get("kind") == "t3"
-        ]
+        posts = [child["data"] for child in data.get("data", {}).get("children", []) if child.get("kind") == "t3"]
         return await self._process_posts(posts, since, "user", cfg["username"], min_score=0)
 
     # ------------------------------------------------------------------
@@ -132,16 +122,14 @@ class RedditScraper(BaseScraper):
         comment_tasks: list = []
 
         for post in posts:
-            created = datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc)
+            created = datetime.fromtimestamp(post.get("created_utc", 0), tz=UTC)
             if created < since:
                 continue
             if post.get("score", 0) < min_score:
                 continue
             valid_posts.append(post)
             if fetch_comments > 0:
-                comment_tasks.append(
-                    self._fetch_comments(post.get("subreddit", ""), post["id"])
-                )
+                comment_tasks.append(self._fetch_comments(post.get("subreddit", ""), post["id"]))
             else:
                 comment_tasks.append(self._empty_comments())
 
@@ -150,7 +138,7 @@ class RedditScraper(BaseScraper):
 
         all_comments = await asyncio.gather(*comment_tasks, return_exceptions=True)
         items: list[ContentItem] = []
-        for post, comments in zip(valid_posts, all_comments):
+        for post, comments in zip(valid_posts, all_comments, strict=False):
             if isinstance(comments, Exception):
                 comments = []
             item = self._parse_post(post, comments, subtype)
@@ -195,7 +183,7 @@ class RedditScraper(BaseScraper):
         discussion_url = f"https://www.reddit.com{post.get('permalink', '')}"
         url = discussion_url if is_self else post.get("url", discussion_url)
         author = post.get("author", "unknown")
-        created = datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc)
+        created = datetime.fromtimestamp(post.get("created_utc", 0), tz=UTC)
 
         parts: list[str] = []
         if post.get("selftext"):
@@ -240,23 +228,22 @@ class RedditScraper(BaseScraper):
     # HTTP helper with rate-limit retry
     # ------------------------------------------------------------------
 
-    async def _reddit_get(
-        self, url: str, params: dict, *, _max_retries: int = 3
-    ) -> Any | None:
+    async def _reddit_get(self, url: str, params: dict, *, _max_retries: int = 3) -> Any | None:
         backoff = 1.0
         last_exc: Exception | None = None
         for attempt in range(_max_retries + 1):
             try:
-                response = await self.client.get(
-                    url, params=params, headers=REDDIT_HEADERS, follow_redirects=True
-                )
+                response = await self.client.get(url, params=params, headers=REDDIT_HEADERS, follow_redirects=True)
                 if response.status_code in (429, 503):
                     retry_after = float(response.headers.get("Retry-After", backoff))
                     if attempt < _max_retries:
                         logger.warning(
                             "Reddit %d for %s, retrying in %.1fs (attempt %d/%d)",
-                            response.status_code, url, retry_after,
-                            attempt + 1, _max_retries,
+                            response.status_code,
+                            url,
+                            retry_after,
+                            attempt + 1,
+                            _max_retries,
                         )
                         await asyncio.sleep(retry_after)
                         backoff = min(backoff * 2, 30)
@@ -272,7 +259,9 @@ class RedditScraper(BaseScraper):
                 if attempt < _max_retries:
                     logger.warning(
                         "Reddit request error for %s: %s, retrying in %.1fs",
-                        url, e, backoff,
+                        url,
+                        e,
+                        backoff,
                     )
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30)

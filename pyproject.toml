@@ -6,6 +6,9 @@ markers = [
     "integration: marks tests that hit external services or the DB",
     "slow: marks slow-running tests",
 ]
+filterwarnings = [
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+]
 
 [tool.ruff]
 line-length = 120

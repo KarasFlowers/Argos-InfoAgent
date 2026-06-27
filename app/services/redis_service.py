@@ -1,15 +1,17 @@
 import json
 import logging
-from typing import Any
-from redis.asyncio import Redis, ConnectionError
+
+from redis.asyncio import Redis
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class RedisService:
     def __init__(self):
         self._redis: Redis | None = None
-        
+
     async def get_client(self) -> Redis | None:
         if self._redis is not None:
             # Verify existing connection is still alive
@@ -40,28 +42,28 @@ class RedisService:
             self._redis = None
 
         return self._redis
-        
+
     async def get_cache(self, key: str) -> dict | None:
         """Retrieve and parse JSON data from Redis cache."""
         client = await self.get_client()
         if not client:
             return None
-            
+
         try:
             cached_data = await client.get(key)
             if cached_data:
                 return json.loads(cached_data)
         except Exception as e:
             logger.error("Error reading from Redis cache (%s): %s", key, e)
-            
+
         return None
-        
+
     async def set_cache(self, key: str, value: dict, expire_seconds: int = 900) -> bool:
         """Serialize and save data to Redis cache with expiration."""
         client = await self.get_client()
         if not client:
             return False
-            
+
         try:
             serialized_value = json.dumps(value, ensure_ascii=False)
             await client.setex(key, expire_seconds, serialized_value)
@@ -79,6 +81,7 @@ class RedisService:
             except Exception:
                 pass
             self._redis = None
+
 
 # Singleton instance
 redis_service = RedisService()

@@ -6,11 +6,12 @@ in sibling modules.  The singleton ``llm_service`` is the public entry
 point — all existing imports of ``from app.services.llm_service import
 llm_service`` continue to work through the facade in ``../llm_service.py``.
 """
+
 import logging
 
 from app.core.config import settings
-from app.services.llm.client import LLMClient
 from app.services.llm.catchup import CatchupMixin
+from app.services.llm.client import LLMClient
 from app.services.llm.scoring import ScoringMixin
 from app.services.llm.summary import SummaryMixin
 from app.services.llm.weekly import WeeklyMixin

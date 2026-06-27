@@ -4,6 +4,7 @@ Pure-LLM source adapter.
 Produces original daily content WITHOUT any external data source. Useful for
 boards like 冷知识 / 英语学习 / 名人名言 where the LLM itself is the content.
 """
+
 import logging
 from typing import TYPE_CHECKING
 

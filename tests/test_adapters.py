@@ -6,7 +6,7 @@ Verifies that all new adapters are registered and retrievable.
 
 import pytest
 
-from app.services.source_adapters import get_adapter, UnknownSourceTypeError
+from app.services.source_adapters import UnknownSourceTypeError, get_adapter
 
 
 @pytest.mark.parametrize(

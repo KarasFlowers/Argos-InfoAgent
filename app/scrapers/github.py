@@ -6,8 +6,8 @@ from datetime import datetime
 
 import httpx
 
-from app.scrapers.base import BaseScraper
 from app.models.schemas import ContentItem
+from app.scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class GitHubScraper(BaseScraper):
     def __init__(self, config: dict, http_client: httpx.AsyncClient):
         super().__init__(config, http_client)
         from app.core.config import settings
+
         self.token = settings.GITHUB_TOKEN or os.getenv("GITHUB_TOKEN")
         self.base_url = "https://api.github.com"
 
@@ -76,16 +77,17 @@ class GitHubScraper(BaseScraper):
             events = resp.json()
 
             for event in events:
-                created_at = datetime.fromisoformat(
-                    event["created_at"].replace("Z", "+00:00")
-                )
+                created_at = datetime.fromisoformat(event["created_at"].replace("Z", "+00:00"))
                 if created_at < since:
                     continue
 
                 event_type = event["type"]
                 if event_type not in (
-                    "PushEvent", "CreateEvent", "ReleaseEvent",
-                    "PublicEvent", "WatchEvent",
+                    "PushEvent",
+                    "CreateEvent",
+                    "ReleaseEvent",
+                    "PublicEvent",
+                    "WatchEvent",
                 ):
                     continue
 
@@ -138,9 +140,7 @@ class GitHubScraper(BaseScraper):
             metadata={"event_type": event_type, "repo": repo_name},
         )
 
-    async def _fetch_repo_releases(
-        self, owner: str, repo: str, since: datetime
-    ) -> list[ContentItem]:
+    async def _fetch_repo_releases(self, owner: str, repo: str, since: datetime) -> list[ContentItem]:
         url = f"{self.base_url}/repos/{owner}/{repo}/releases"
         items: list[ContentItem] = []
 
@@ -150,9 +150,7 @@ class GitHubScraper(BaseScraper):
             releases = resp.json()
 
             for release in releases:
-                published_at = datetime.fromisoformat(
-                    release["published_at"].replace("Z", "+00:00")
-                )
+                published_at = datetime.fromisoformat(release["published_at"].replace("Z", "+00:00"))
                 if published_at < since:
                     continue
 

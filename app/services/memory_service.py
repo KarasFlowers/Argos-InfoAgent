@@ -11,13 +11,13 @@ preference centroids): UserMemory is for explicit factual recall.
 
 import json
 import logging
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
-from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from app.models.domain import UserMemory, ChatMessage
 from app.core.db import AsyncSessionLocal
+from app.models.domain import ChatMessage, UserMemory
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ async def get_memory(key: str) -> str | None:
     async with AsyncSessionLocal() as session:
         stmt = select(UserMemory).where(
             UserMemory.key == key,
-            UserMemory.is_active == True,
+            UserMemory.is_active.is_(True),
         )
         result = await session.execute(stmt)
         entry = result.scalars().first()
@@ -72,7 +72,7 @@ async def get_memories_by_category(category: str) -> list[UserMemory]:
     async with AsyncSessionLocal() as session:
         stmt = (
             select(UserMemory)
-            .where(UserMemory.category == category, UserMemory.is_active == True)
+            .where(UserMemory.category == category, UserMemory.is_active.is_(True))
             .order_by(UserMemory.updated_at.desc())
         )
         result = await session.execute(stmt)
@@ -82,11 +82,7 @@ async def get_memories_by_category(category: str) -> list[UserMemory]:
 async def get_all_active_memories() -> list[UserMemory]:
     """Get all active memory entries."""
     async with AsyncSessionLocal() as session:
-        stmt = (
-            select(UserMemory)
-            .where(UserMemory.is_active == True)
-            .order_by(UserMemory.category, UserMemory.key)
-        )
+        stmt = select(UserMemory).where(UserMemory.is_active.is_(True)).order_by(UserMemory.category, UserMemory.key)
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -137,12 +133,7 @@ async def auto_extract_memories(session: AsyncSession) -> int:
 
     # Get recent chat messages (last 24h)
     cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    stmt = (
-        select(ChatMessage)
-        .where(ChatMessage.timestamp >= cutoff)
-        .order_by(ChatMessage.timestamp)
-        .limit(50)
-    )
+    stmt = select(ChatMessage).where(ChatMessage.timestamp >= cutoff).order_by(ChatMessage.timestamp).limit(50)
     result = await session.execute(stmt)
     messages = result.scalars().all()
 
@@ -158,7 +149,7 @@ async def auto_extract_memories(session: AsyncSession) -> int:
     conv_text = "\n".join(conversation)
 
     # Get existing memory keys to avoid duplicates
-    existing_stmt = select(UserMemory.key).where(UserMemory.is_active == True)
+    existing_stmt = select(UserMemory.key).where(UserMemory.is_active.is_(True))
     existing_result = await session.execute(existing_stmt)
     existing_keys = {row[0] for row in existing_result.all()}
 

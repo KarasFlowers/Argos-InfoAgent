@@ -72,7 +72,9 @@ async def research(
 
 
 async def _gather_evidence_parallel(
-    queries: list[str], *, top_k: int = 5,
+    queries: list[str],
+    *,
+    top_k: int = 5,
 ) -> list[dict[str, Any]]:
     """Gather evidence for multiple queries concurrently."""
     tasks = [_gather_evidence(sq, top_k=top_k) for sq in queries]
@@ -108,8 +110,8 @@ async def _assess_sufficiency(
         f"Sub-queries explored: {sub_queries}\n"
         f"Evidence gathered:\n{findings_summary}\n\n"
         f"Is the evidence sufficient to answer the original question comprehensively?\n"
-        f"If YES, respond with: {{\"sufficient\": true}}\n"
-        f"If NO, respond with: {{\"sufficient\": false, \"gaps\": [\"gap query 1\", \"gap query 2\"]}}\n"
+        f'If YES, respond with: {{"sufficient": true}}\n'
+        f'If NO, respond with: {{"sufficient": false, "gaps": ["gap query 1", "gap query 2"]}}\n'
         f"Limit gaps to at most 2. Respond in JSON only."
     )
     try:
@@ -165,22 +167,26 @@ async def _gather_evidence(query: str, top_k: int = 5) -> dict[str, Any]:
     # RAG search (uses cross-article retrieval when RAG is enabled)
     try:
         from app.services.rag_service import query_cross_article
+
         chunks: list[str] = []
         async for chunk in query_cross_article(query, top_k_per_collection=top_k, top_k_final=top_k):
             chunks.append(chunk)
         if chunks:
-            sources.append({
-                "type": "rag",
-                "title": query,
-                "content": "".join(chunks)[:500],
-                "url": "",
-            })
+            sources.append(
+                {
+                    "type": "rag",
+                    "title": query,
+                    "content": "".join(chunks)[:500],
+                    "url": "",
+                }
+            )
     except Exception as exc:
         logger.warning("RAG search failed for sub-query '%s': %s", query, exc)
 
     # Web search fallback (if Tavily is configured)
     try:
         from app.core.config import settings
+
         if settings.TAVILY_API_KEY:
             web_results = await _tavily_search(query, max_results=3)
             sources.extend(web_results)
@@ -191,10 +197,7 @@ async def _gather_evidence(query: str, top_k: int = 5) -> dict[str, Any]:
     if not sources:
         return {"query": query, "sources": [], "summary": "No evidence found."}
 
-    evidence_text = "\n\n".join(
-        f"[{i+1}] ({s['type']}) {s['title']}\n{s['content']}" 
-        for i, s in enumerate(sources)
-    )
+    evidence_text = "\n\n".join(f"[{i+1}] ({s['type']}) {s['title']}\n{s['content']}" for i, s in enumerate(sources))
 
     try:
         response = await llm_service.llm.chat(
@@ -251,6 +254,7 @@ async def tavily_search(query: str, max_results: int = 3) -> list[dict[str, str]
     keys ``type`` ("web"), ``title``, ``content`` (truncated), ``url``.
     """
     import httpx
+
     from app.core.config import settings
 
     if not settings.TAVILY_API_KEY:
@@ -271,12 +275,14 @@ async def tavily_search(query: str, max_results: int = 3) -> list[dict[str, str]
 
     results = []
     for r in data.get("results", []):
-        results.append({
-            "type": "web",
-            "title": r.get("title", ""),
-            "content": (r.get("content") or "")[:500],
-            "url": r.get("url", ""),
-        })
+        results.append(
+            {
+                "type": "web",
+                "title": r.get("title", ""),
+                "content": (r.get("content") or "")[:500],
+                "url": r.get("url", ""),
+            }
+        )
     return results
 
 

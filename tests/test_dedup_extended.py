@@ -5,10 +5,8 @@ Tests edge cases for URL normalisation and cross-source merge that
 are not covered in test_dedup.py.
 """
 
-import pytest
-
 from app.models.schemas import ContentItem
-from app.services.dedup_service import normalize_url, merge_cross_source_duplicates
+from app.services.dedup_service import merge_cross_source_duplicates, normalize_url
 
 
 def _make_item(
@@ -32,6 +30,7 @@ def _make_item(
 # ---------------------------------------------------------------------------
 # URL normalisation edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeUrlEdgeCases:
     def test_preserves_path_case(self):
@@ -67,6 +66,7 @@ class TestNormalizeUrlEdgeCases:
 # Cross-source merge edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestMergeEdgeCases:
     def test_single_item_unchanged(self):
         items = [_make_item("rss", "https://example.com/a")]
@@ -78,7 +78,9 @@ class TestMergeEdgeCases:
         items = [
             _make_item("rss", "https://example.com/article", content="short"),
             _make_item("hackernews", "https://www.example.com/article", content="medium length"),
-            _make_item("reddit", "https://example.com/article/", content="the longest content here with lots of detail"),
+            _make_item(
+                "reddit", "https://example.com/article/", content="the longest content here with lots of detail"
+            ),
         ]
         merged = merge_cross_source_duplicates(items)
         assert len(merged) == 1

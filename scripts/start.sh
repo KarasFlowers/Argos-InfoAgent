@@ -65,18 +65,26 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
     if [ -t 0 ]; then
         # Interactive terminal — prompt for API key
         echo ""
-        echo -e "${CYAN}First-time setup: please enter your DeepSeek API key.${NC}"
-        echo -e "  (Get one at https://platform.deepseek.com/api_keys)"
-        echo -n "  DEEPSEEK_API_KEY: "
+        echo -e "${CYAN}First-time setup: please enter your OpenAI-compatible LLM API key.${NC}"
+        echo -e "  Default model is DeepSeek-compatible; OpenAI-compatible providers also work."
+        echo -n "  LLM_API_KEY: "
         read -r api_key
         if [ -n "$api_key" ]; then
             cp "$PROJECT_ROOT/.env.template" "$PROJECT_ROOT/.env"
-            # Replace placeholder with actual key
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                sed -i '' "s|sk-your-deepseek-api-key-here|${api_key}|" "$PROJECT_ROOT/.env"
-            else
-                sed -i "s|sk-your-deepseek-api-key-here|${api_key}|" "$PROJECT_ROOT/.env"
-            fi
+            ARGOS_FIRST_RUN_LLM_API_KEY="$api_key" "$SYSTEM_PYTHON" - <<'PY'
+from pathlib import Path
+import os
+
+env_path = Path(".env")
+api_key = os.environ["ARGOS_FIRST_RUN_LLM_API_KEY"]
+text = env_path.read_text(encoding="utf-8")
+placeholder = '# LLM_API_KEY="sk-your-api-key-here"'
+if placeholder in text:
+    text = text.replace(placeholder, f'LLM_API_KEY="{api_key}"')
+elif "LLM_API_KEY=" not in text:
+    text += f'\nLLM_API_KEY="{api_key}"\n'
+env_path.write_text(text, encoding="utf-8")
+PY
             ok ".env created with your API key."
         else
             cp "$PROJECT_ROOT/.env.template" "$PROJECT_ROOT/.env"
@@ -84,8 +92,31 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
         fi
     else
         cp "$PROJECT_ROOT/.env.template" "$PROJECT_ROOT/.env"
-        warn ".env created from template. Please edit it to add your DEEPSEEK_API_KEY."
+        warn ".env created from template. Please edit it to add your LLM_API_KEY."
     fi
+fi
+
+RAG_ENABLED_RAW="${RAG_ENABLED:-}"
+if [ -z "$RAG_ENABLED_RAW" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+    RAG_ENABLED_RAW="$(grep -E '^[[:space:]]*RAG_ENABLED=' "$PROJECT_ROOT/.env" | tail -n 1 | cut -d= -f2- | tr -d "\"'[:space:]" || true)"
+fi
+case "${RAG_ENABLED_RAW,,}" in
+    false|0|no|off)
+        RAG_ENABLED_EFFECTIVE=false
+        ;;
+    *)
+        RAG_ENABLED_EFFECTIVE=true
+        ;;
+esac
+
+if [ "$RAG_ENABLED_EFFECTIVE" = "true" ]; then
+    if ! "$PYTHON" -c "import sentence_transformers" >/dev/null 2>&1; then
+        info "Installing RAG dependencies..."
+        "$PIP" install -r requirements-rag.txt -q
+        ok "RAG dependencies installed."
+    fi
+else
+    info "RAG_ENABLED=false; skipping RAG dependencies and embedding model download."
 fi
 
 # ---- 4) Ensure data directories exist ----
@@ -116,17 +147,10 @@ else
     warn "Redis not found. Caching will be disabled. Install with: sudo apt install redis-server / brew install redis"
 fi
 
-# ---- 7) Pre-download models if not cached ----
-if [ ! -d "${HF_HOME:-$HOME/.cache/huggingface}/hub/models--BAAI--bge-m3" ]; then
+# ---- 7) Pre-download models if RAG is enabled and not cached ----
+if [ "$RAG_ENABLED_EFFECTIVE" = "true" ] && [ ! -d "${HF_HOME:-$HOME/.cache/huggingface}/hub/models--BAAI--bge-m3" ]; then
     info "Pre-downloading embedding models (first run only, ~500MB)..."
-    "$PYTHON" -c "
-from sentence_transformers import SentenceTransformer, CrossEncoder
-print('  Downloading BAAI/bge-m3 ...')
-SentenceTransformer('BAAI/bge-m3')
-print('  Downloading cross-encoder/ms-marco-MiniLM-L-6-v2 ...')
-CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-print('  Done.')
-" && ok "Models cached." || warn "Model download failed. They will be downloaded on first use."
+    "$PYTHON" scripts/download_models.py && ok "Models cached." || warn "Model download failed. They will be downloaded on first use."
 fi
 
 # ---- 8) Start backend ----

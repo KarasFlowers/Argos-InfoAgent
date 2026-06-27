@@ -2,8 +2,6 @@
 test_content_item.py - Unit tests for ContentItem model and RSS -> ContentItem conversion.
 """
 
-import pytest
-
 from app.models.schemas import ContentItem, RSSItem, RSSResponse
 from app.services.rss_service import rss_responses_to_content_items
 

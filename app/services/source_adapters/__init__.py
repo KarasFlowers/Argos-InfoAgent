@@ -17,17 +17,18 @@ Skill-based adapters:
   Any module placed at ``app/skills/<name>/skill.py`` that defines a class
   inheriting from ``SourceAdapter`` will be auto-registered at startup.
 """
+
 import importlib
 import logging
 from pathlib import Path
 
 from app.services.source_adapters.base import SourceAdapter, UnknownSourceTypeError
-from app.services.source_adapters.rss_adapter import RSSAdapter
-from app.services.source_adapters.pure_llm_adapter import PureLLMAdapter
-from app.services.source_adapters.hackernews_adapter import HackerNewsAdapter
-from app.services.source_adapters.reddit_adapter import RedditAdapter
 from app.services.source_adapters.github_adapter import GitHubAdapter
+from app.services.source_adapters.hackernews_adapter import HackerNewsAdapter
 from app.services.source_adapters.multi_adapter import MultiSourceAdapter
+from app.services.source_adapters.pure_llm_adapter import PureLLMAdapter
+from app.services.source_adapters.reddit_adapter import RedditAdapter
+from app.services.source_adapters.rss_adapter import RSSAdapter
 
 _logger = logging.getLogger(__name__)
 
@@ -73,15 +74,16 @@ def _discover_skill_adapters() -> None:
                 source_type = obj.source_type
                 if source_type in _REGISTRY:
                     _logger.warning(
-                        "Skill '%s' defines source_type='%s' which conflicts with "
-                        "an existing adapter; skipping.",
-                        module_name, source_type,
+                        "Skill '%s' defines source_type='%s' which conflicts with " "an existing adapter; skipping.",
+                        module_name,
+                        source_type,
                     )
                     continue
                 _REGISTRY[source_type] = obj()
                 _logger.info(
                     "Registered skill adapter '%s' (source_type='%s')",
-                    module_name, source_type,
+                    module_name,
+                    source_type,
                 )
 
 
@@ -95,8 +97,7 @@ def get_adapter(source_type: str) -> SourceAdapter:
     adapter = _REGISTRY.get(source_type)
     if adapter is None:
         raise UnknownSourceTypeError(
-            f"No adapter registered for source_type='{source_type}'. "
-            f"Valid types: {list(_REGISTRY.keys())}"
+            f"No adapter registered for source_type='{source_type}'. " f"Valid types: {list(_REGISTRY.keys())}"
         )
     return adapter
 

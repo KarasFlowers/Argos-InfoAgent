@@ -32,9 +32,9 @@ Argos 是一个基于 FastAPI 的每日科技简报应用。它从多种来源�
 
 显式喜欢/不喜欢反馈 + 自动兴趣提取 + **用户记忆系统**（持久化偏好和上下文）。越用越懂你。
 
-### 📢 多渠道推送
+### 📢 邮件推送
 
-通过**邮件、Webhook、Bark (iOS)、Telegram** 推送每日简报 —— 定时自动送达或按需触发。
+通过 **SMTP 邮件** 推送每日简报 —— 定时自动送达或按需触发。外部通知默认关闭。
 
 ---
 
@@ -78,9 +78,17 @@ cp .env.template .env
 # 3. 启动服务栈
 docker compose up -d
 
+# 可选：运行生产 smoke 验收（健康检查 + API Key 行为）
+python scripts/docker_smoke.py --no-build
+
+# 可选：运行非 Docker 本地运行时 smoke
+python scripts/runtime_smoke.py
+
 # 4. 浏览器访问
 # 打开 http://127.0.0.1:8000
 ```
+
+Compose 服务栈通过可选的 `env_file` 读取 `.env`，只发布 Argos Web 端口；Redis 保持在 Docker 内部网络中。
 
 ### 一键启动（本地推荐）
 
@@ -153,13 +161,14 @@ uvicorn main:app --reload
 |------|------|--------|------|
 | `LLM_API_KEY` | **是** | - | 任意 OpenAI 兼容 LLM 提供商的 API 密钥 |
 | `LLM_MODEL` | 否 | `deepseek-chat` | 所有 LLM 调用使用的默认模型名 |
-| `LLM_BASE_URL` | 否 | `https://api.deepseek.com/v1` | LLM API 的基础 URL |
+| `LLM_BASE_URL` | 否 | - | LLM API 的基础 URL。使用通用 `LLM_API_KEY` 时需要显式设置；只有未设置 `LLM_API_KEY` 时才会回退到旧版 `DEEPSEEK_BASE_URL` |
 | `LLM_TIMEOUT` | 否 | `180` | 请求超时（秒） |
 | `LLM_MAX_RETRIES` | 否 | `1` | 瞬态失败最大重试次数 |
 | `FAST_LLM` | 否 | - | 「快速」层级模型，`provider:model` 格式（如 `openai:gpt-4o-mini`）。留空则回退到 `LLM_MODEL` |
 | `SMART_LLM` | 否 | - | 「智能」层级模型，`provider:model` 格式。留空则回退到 `LLM_MODEL` |
 | `DEEPSEEK_API_KEY` | 否 | - | 旧版别名 — 当 `LLM_API_KEY` 未设置时作为回退 |
-| `API_KEY` | 否 | - | API 认证密钥，设置后所有 `/api/v1/*` 请求需携带 `X-API-Key` 请求头。不设置则无需认证 |
+| `API_KEY` | 否 | - | 私有 API 认证密钥，通过 `X-API-Key` 请求头传递。不设置则无需认证 |
+| `PUBLIC_BASE_URL` | 否 | `http://localhost:8000` | 生成 RSS/canonical 链接时使用的公开访问地址。必须是绝对 `http(s)` URL，不能包含 query/fragment |
 | `SQLALCHEMY_DATABASE_URI` | 否 | `sqlite+aiosqlite:///./data/sqlite/argos.db` | 异步 SQLite 数据库路径 |
 | `CHROMA_DB_DIR` | 否 | `./data/chroma` | ChromaDB 持久化存储路径 |
 | `REDIS_URL` | 否 | `redis://localhost:6379` | Redis 连接 URL |
@@ -167,7 +176,8 @@ uvicorn main:app --reload
 | `RAG_BACKGROUND_INGEST_WORKERS` | 否 | `2` | 后台入库工作协程数量 |
 | `RAG_HYDE_ENABLED` | 否 | `True` | 启用 HyDE（假设文档嵌入）查询重写 |
 | `HISTORY_DAYS_TO_KEEP` | 否 | `7` | 历史数据保留天数 |
-| `CORS_ORIGINS` | 否 | `http://localhost:3000,...` | 逗号分隔的前端允许来源 |
+| `CORS_ORIGINS` | 否 | `http://localhost:3000,...` | 逗号分隔的前端允许来源。每一项必须是 origin，不能带路径；使用 `*` 时会关闭 credentialed CORS |
+| `CORS_ALLOW_CREDENTIALS` | 否 | `True` | 对明确列出的来源允许 credentialed CORS。`CORS_ORIGINS=*` 时该设置会被忽略 |
 | `GITHUB_TOKEN` | 否 | - | GitHub 个人访问令牌（将速率限制提升至 5000 次/小时） |
 | `HN_FETCH_TOP_STORIES` | 否 | `30` | 获取的 Hacker News 热门故事数量 |
 | `HN_MIN_SCORE` | 否 | `100` | Hacker News 最低分数阈值 |
@@ -179,13 +189,21 @@ uvicorn main:app --reload
 | `SMTP_FROM` | 否 | - | 发件人地址（如 `Argos <you@example.com>`） |
 | `EMAIL_SUBSCRIBERS` | 否 | `[]` | 订阅者邮箱地址的 JSON 列表 |
 | `DAILY_PUSH_TIME` | 否 | `08:00` | 每日邮件发送时间（HH:MM 格式） |
-| `NOTIFY_CHANNELS` | 否 | `email` | 通知渠道（逗号分隔）：`email,webhook,bark,telegram` |
-| `WEBHOOK_URL` | 否 | - | 通用 Webhook URL（POST JSON） |
-| `WEBHOOK_SECRET` | 否 | - | Webhook HMAC-SHA256 签名密钥 |
-| `BARK_URL` | 否 | - | Bark iOS 推送 URL（如 `https://api.day.app/KEY`） |
-| `BARK_GROUP` | 否 | `Argos` | Bark 通知分组名称 |
-| `TELEGRAM_BOT_TOKEN` | 否 | - | Telegram Bot Token |
-| `TELEGRAM_CHAT_ID` | 否 | - | Telegram 接收消息的用户/群组 ID |
+| `LOG_FORMAT` | 否 | - | 设置为 `json` 后输出结构化 JSON 日志；常见密钥字段和 token 形态的值会在输出前脱敏 |
+| `NOTIFY_CHANNELS` | 否 | - | 通知渠道（逗号分隔）。留空则禁用定时外部通知；当前仅实现 `email` |
+
+### 安全与自托管说明
+
+- Argos 默认定位为私有单用户/自托管应用，不包含多租户账号体系或角色权限模型。
+- 设置 `API_KEY` 后，私有 API 请求必须携带 `X-API-Key: <value>`。公开路径保持开放：`/`、`/favicon.ico`、`/static/*`、`/feed`、`/api/v1/ping`；`OPTIONS` 请求用于 CORS 预检时也保持开放。
+- Web 仪表板提供“密钥”入口，会把 `API_KEY` 保存在浏览器 localStorage，并在同源 API 请求中自动发送 `X-API-Key`。仅建议在可信个人设备上保存。
+- `LLM_API_KEY`、`DEEPSEEK_API_KEY` 等供应商密钥从环境变量读取；新安装不会把这些密钥复制进 SQLite 的 `ModelApiConfig` 表。
+- 如果通过反向代理对外提供服务，请把 `PUBLIC_BASE_URL` 设置为外部可访问地址，避免 RSS/feed 链接生成错误。
+- 使用 `python scripts/backup_data.py` 同时备份 `data/sqlite/argos.db` 和 `data/chroma/`；如果同一时间戳已存在，会自动生成带后缀的新归档，不会覆盖旧备份。恢复前先停止 Argos，并运行 `python scripts/restore_data.py backups/<archive>.zip --dry-run` 查看将写入的目标路径；只有确认要覆盖已有本地数据时才传入 `--force`。
+- 轻量部署可以设置 `RAG_ENABLED=false`，跳过文章级 RAG 和大体积 embedding 模型下载。
+- 定时外部通知默认关闭。启用邮件推送前，请显式设置 `NOTIFY_CHANNELS=email` 和 SMTP 配置。
+- 在把 Argos 暴露到 localhost 或私有网络之外前，请阅读 [SECURITY.md](SECURITY.md)。
+- 工业化加固证据见 [docs/INDUSTRIALIZATION_AUDIT.md](docs/INDUSTRIALIZATION_AUDIT.md)。
 
 ## 看板来源类型
 
@@ -259,7 +277,7 @@ python mcp_server.py
 - **LLM 服务**：`ScoringMixin`、`SummaryMixin`、`WeeklyMixin`、`WizardMixin` + 带 CircuitBreaker 和多层级路由的 `LLMClient`
 - **RAG 服务**：混合检索管道（Bi-Encoder + BM25 + Cross-Encoder 重排序）、HyDE 重写、后台入库、跨文章搜索
 - **数据库服务**：`SummaryRepo`、`PersonaRepo`、`BoardRepo`
-- **通知服务**：`dispatcher.py` + `channels.py` — 多渠道分发器（邮件、Webhook、Bark、Telegram）
+- **通知服务**：`notification/dispatcher.py` — 邮件分发器；未支持的 channel 会失败关闭
 - **来源适配器**：可插拔适配器，支持 `rss`、`hackernews`、`reddit`、`github`、`multi`、`pure_llm`
 
 ### 独立服务
@@ -298,7 +316,7 @@ python mcp_server.py
 │   │   ├── llm/                # LLM 客户端、评分、摘要、周报、向导
 │   │   ├── rag/                # RAG 管道（bi-encoder、cross-encoder、ChromaDB、BM25）
 │   │   ├── repositories/      # 数据库仓库（摘要、角色、看板）
-│   │   ├── notification/      # 多渠道分发器（邮件、webhook、bark、telegram）
+│   │   ├── notification/      # 通知分发器（邮件）
 │   │   ├── chat_history_service.py
 │   │   ├── clustering_service.py
 │   │   ├── dedup_service.py
@@ -359,7 +377,7 @@ python mcp_server.py
 
 ## API 参考
 
-所有接口前缀为 `/api/v1`。设置 `API_KEY` 后，请求需携带 `X-API-Key` 请求头。
+私有接口前缀为 `/api/v1`；下方表格中的接口默认省略此前缀，除非明确标为公开页面。设置 `API_KEY` 后，私有请求需携带 `X-API-Key` 请求头；`/api/v1/ping` 保持公开用于健康检查，`OPTIONS` 保持开放用于 CORS 预检。
 
 ### 简报与摘要
 
@@ -429,6 +447,7 @@ python mcp_server.py
 | 方法 | 端点 | 描述 |
 |------|------|------|
 | GET | `/ping` | 健康检查 |
+| GET | `/status` | 私有就绪诊断（数据库/功能/认证状态，不返回密钥） |
 | GET | `/metrics` | 系统指标（Token 用量、延迟） |
 | GET | `/metrics/cost` | 按标签的 LLM 成本明细 |
 | GET | `/admin/tasks` | 后台任务运行历史 |
@@ -458,5 +477,3 @@ python mcp_server.py
 ## 许可证
 
 本项目采用 MIT 许可证 - 详情请查看 [LICENSE](LICENSE) 文件。
-
-

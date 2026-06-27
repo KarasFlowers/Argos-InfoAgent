@@ -4,8 +4,9 @@ Hacker News source adapter.
 Reads ``board.source_config`` for HN-specific settings (fetch_top_stories,
 min_score), fetches via the HN scraper, and hands off to the LLM editor.
 """
+
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +44,7 @@ class HackerNewsAdapter(SourceAdapter):
             "min_score": config.get("min_score", settings.HN_MIN_SCORE),
         }
 
-        since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        since = datetime.now(UTC) - timedelta(hours=since_hours)
 
         client = get_http_client()
         scraper = HackerNewsScraper(scraper_config, client)

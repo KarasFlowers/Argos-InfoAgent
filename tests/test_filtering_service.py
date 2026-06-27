@@ -1,12 +1,10 @@
 """Tests for rule-based content quality filtering."""
 
-import pytest
 from app.models.schemas import ContentItem
 from app.services.filtering_service import (
     _check_blacklist,
-    _check_low_signal,
     _check_low_quality_domain,
-    FilteringResult,
+    _check_low_signal,
 )
 
 

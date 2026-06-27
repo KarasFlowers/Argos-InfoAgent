@@ -9,12 +9,14 @@ Models downloaded:
     - BAAI/bge-m3          (~570 MB)  — Bi-Encoder for semantic search
     - ms-marco-MiniLM-L-6  (~80 MB)  — Cross-Encoder for reranking
 """
+
 import sys
 import time
 
 
 def main() -> int:
     import os
+
     print("=" * 50)
     print("  Argos — Model Pre-Download")
     print("=" * 50)
@@ -25,7 +27,7 @@ def main() -> int:
         return 0
 
     try:
-        from sentence_transformers import SentenceTransformer, CrossEncoder
+        from sentence_transformers import CrossEncoder, SentenceTransformer
     except ImportError:
         print("[ERROR] sentence-transformers is not installed.")
         print("  Run: pip install -r requirements-rag.txt")

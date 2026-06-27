@@ -19,7 +19,10 @@ let currentCoverageRequestId = 0;
 let currentSilentModeStatus = null;
 let availablePromptTemplates = [];
 let overlayFocusStack = [];
+let apiKeySaveInFlight = false;
 
+const API_KEY_STORAGE_KEY = 'argos_api_key';
+const API_KEY_HEADER = 'X-API-Key';
 const SUMMARY_LOADING_TEXT = 'AI 编辑正在努力生成今日简报，这可能需要几十秒...';
 const SUMMARY_CACHE_KEY = 'argos_summary_cache';
 const OVERLAY_FOCUSABLE_SELECTOR = [
@@ -41,7 +44,8 @@ const OVERLAY_DIALOG_LABELS = {
     'stats-modal': '数据统计',
     'board-modal': '板块管理',
     'saved-modal': '我的收藏',
-    'rag-panel': '深度追问'
+    'rag-panel': '深度追问',
+    'api-key-panel': 'API Key'
 };
 const SOURCE_CREDIBILITY_OPTIONS = [
     { value: '', label: '自动判断' },
@@ -70,9 +74,21 @@ const ICONS = {
 
 // url -> Set of saved statuses ("favorite" | "read_later")
 let savedStatusMap = {};
+let savedStateLoadError = '';
+
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = async function argosAuthenticatedFetch(input, init) {
+    const response = await _nativeFetch(input, _withApiKeyHeader(input, init));
+    if (response.status === 403 && _isArgosApiRequest(input)) {
+        showApiKeyRequired();
+    }
+    return response;
+};
 
 document.addEventListener('DOMContentLoaded', async () => {
     _initTheme();
+    ensureApiKeyPanel();
+    updateApiKeyButtonState();
     _primeBoardSlugFromStorage();
     setupOverlayExperience();
     setupBoardFormExperience();
@@ -94,6 +110,213 @@ document.addEventListener('DOMContentLoaded', async () => {
     fetchSummary();
     await promptTemplatesPromise;
 });
+
+function _isArgosApiRequest(input) {
+    try {
+        const rawUrl = input instanceof Request ? input.url : String(input);
+        const url = new URL(rawUrl, window.location.origin);
+        return url.origin === window.location.origin && url.pathname.startsWith('/api/');
+    } catch (_) {
+        return false;
+    }
+}
+
+function _getStoredApiKey() {
+    try {
+        return localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+    } catch (_) {
+        return '';
+    }
+}
+
+function _setStoredApiKey(value) {
+    try {
+        if (value) {
+            localStorage.setItem(API_KEY_STORAGE_KEY, value);
+        } else {
+            localStorage.removeItem(API_KEY_STORAGE_KEY);
+        }
+    } catch (_) {}
+}
+
+function _withApiKeyHeader(input, init) {
+    if (!_isArgosApiRequest(input)) {
+        return init;
+    }
+
+    const apiKey = _getStoredApiKey();
+    if (!apiKey) {
+        return init;
+    }
+
+    const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+    if (!headers.has(API_KEY_HEADER)) {
+        headers.set(API_KEY_HEADER, apiKey);
+    }
+    return { ...(init || {}), headers };
+}
+
+function ensureApiKeyPanel() {
+    if (document.getElementById('api-key-panel')) {
+        return;
+    }
+
+    const panel = document.createElement('div');
+    panel.id = 'api-key-panel';
+    panel.className = 'modal-overlay';
+    panel.onclick = (event) => {
+        if (event.target === panel) closeApiKeyDialog();
+    };
+    panel.innerHTML = `
+        <div class="modal-content api-key-modal-content">
+            <div class="persona-header">
+                <h3>API Key</h3>
+                <button class="close-btn" onclick="closeApiKeyDialog()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="api-key-body">
+                <label class="api-key-label" for="api-key-input">X-API-Key</label>
+                <div class="api-key-input-row">
+                    <input id="api-key-input" class="api-key-input" type="password" autocomplete="current-password" placeholder="输入 .env 中的 API_KEY">
+                    <button id="api-key-toggle" class="api-key-toggle" type="button" onclick="toggleApiKeyVisibility()">显示</button>
+                </div>
+                <p id="api-key-message" class="api-key-message" role="status" aria-live="polite"></p>
+                <div class="api-key-actions">
+                    <button class="secondary-btn" onclick="clearApiKeyAndReload()">清除</button>
+                    <button id="api-key-save" class="primary-btn" onclick="saveApiKeyFromDialog()">保存并刷新</button>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(panel);
+    const input = document.getElementById('api-key-input');
+    if (input) {
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                saveApiKeyFromDialog();
+            }
+        });
+    }
+}
+
+function updateApiKeyButtonState() {
+    const button = document.getElementById('api-key-btn');
+    if (!button) return;
+    const hasKey = !!_getStoredApiKey();
+    button.classList.toggle('has-api-key', hasKey);
+    button.title = hasKey ? '更新 API Key' : '设置 API Key';
+}
+
+function openApiKeyDialog(message = '') {
+    ensureApiKeyPanel();
+    const panel = document.getElementById('api-key-panel');
+    const input = document.getElementById('api-key-input');
+    const toggle = document.getElementById('api-key-toggle');
+    const messageEl = document.getElementById('api-key-message');
+    if (input) {
+        input.type = 'password';
+        input.value = _getStoredApiKey();
+        setTimeout(() => input.select(), 0);
+    }
+    if (toggle) toggle.textContent = '显示';
+    if (messageEl) {
+        messageEl.setAttribute('role', message ? 'alert' : 'status');
+        messageEl.textContent = message;
+    }
+    openOverlay(panel, '#api-key-input');
+}
+
+function closeApiKeyDialog() {
+    closeOverlay(document.getElementById('api-key-panel'));
+}
+
+function toggleApiKeyVisibility() {
+    const input = document.getElementById('api-key-input');
+    const toggle = document.getElementById('api-key-toggle');
+    if (!input || !toggle) return;
+    const shouldShow = input.type === 'password';
+    input.type = shouldShow ? 'text' : 'password';
+    toggle.textContent = shouldShow ? '隐藏' : '显示';
+}
+
+function showApiKeyRequired() {
+    const panel = document.getElementById('api-key-panel');
+    if (isOverlayOpen(panel)) {
+        return;
+    }
+    const message = _getStoredApiKey()
+        ? '当前保存的 API Key 未通过验证。请确认 .env 中的 API_KEY 是否已变更。'
+        : '服务器需要 API Key。请填写 .env 中的 API_KEY 后刷新页面。';
+    openApiKeyDialog(message);
+}
+
+async function saveApiKeyFromDialog() {
+    if (apiKeySaveInFlight) return;
+    const input = document.getElementById('api-key-input');
+    const value = input ? input.value.trim() : '';
+    const messageEl = document.getElementById('api-key-message');
+    const saveButton = document.getElementById('api-key-save');
+    if (!value) {
+        if (messageEl) {
+            messageEl.setAttribute('role', 'alert');
+            messageEl.textContent = 'API Key 不能为空。';
+        }
+        return;
+    }
+
+    if (messageEl) {
+        messageEl.setAttribute('role', 'status');
+        messageEl.textContent = '正在验证 API Key...';
+    }
+    apiKeySaveInFlight = true;
+    if (saveButton) {
+        saveButton.disabled = true;
+        saveButton.textContent = '验证中...';
+    }
+    try {
+        const response = await _nativeFetch('/api/v1/status', {
+            headers: { [API_KEY_HEADER]: value }
+        });
+        if (response.status === 403) {
+            if (messageEl) {
+                messageEl.setAttribute('role', 'alert');
+                messageEl.textContent = 'API Key 未通过验证，请检查 .env 中的 API_KEY。';
+            }
+            return;
+        }
+        if (!response.ok) {
+            if (messageEl) {
+                messageEl.setAttribute('role', 'alert');
+                messageEl.textContent = `验证失败：HTTP ${response.status}`;
+            }
+            return;
+        }
+    } catch (error) {
+        if (messageEl) {
+            messageEl.setAttribute('role', 'alert');
+            messageEl.textContent = `无法验证 API Key：${error.message}`;
+        }
+        return;
+    } finally {
+        apiKeySaveInFlight = false;
+        if (saveButton) {
+            saveButton.disabled = false;
+            saveButton.textContent = '保存并刷新';
+        }
+    }
+
+    _setStoredApiKey(value);
+    updateApiKeyButtonState();
+    window.location.reload();
+}
+
+function clearApiKeyAndReload() {
+    _setStoredApiKey('');
+    updateApiKeyButtonState();
+    window.location.reload();
+}
 
 function _initTheme() {
     let saved = null;
@@ -336,6 +559,15 @@ function showErrorState(message, retryHandler) {
     loadingState.appendChild(box);
 }
 
+function setSummaryFeedback(message, type = 'info') {
+    const feedback = document.getElementById('summary-feedback');
+    if (!feedback) return;
+    feedback.textContent = message || '';
+    feedback.className = `summary-feedback${message ? ' is-visible' : ''}${type ? ` is-${safeClassToken(type, 'info', ['info', 'error'])}` : ''}`;
+    feedback.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    feedback.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+}
+
 function computeSourceStats(items) {
     const stats = {};
     for (const item of items || []) {
@@ -348,6 +580,9 @@ function computeSourceStats(items) {
 async function initBoards() {
     try {
         const res = await fetch('/api/v1/boards');
+        if (!res.ok) {
+            throw new Error(await readResponseError(res, '读取板块失败'));
+        }
         availableBoards = await res.json();
         
         const container = document.getElementById('board-tabs');
@@ -369,6 +604,8 @@ async function initBoards() {
         renderBoardTabs();
     } catch (e) {
         currentBoardSlug = null;
+        availableBoards = [];
+        setBoardTabsFeedback(`板块加载失败：${e.message}`, 'error');
         console.error("Failed to initialize boards", e);
     }
 }
@@ -397,6 +634,15 @@ function renderBoardTabs() {
     container.querySelector('.js-board-add')?.addEventListener('click', () => openBoardModal());
     
     _setupBoardDragAndDrop(container);
+}
+
+function setBoardTabsFeedback(message, type = 'info') {
+    const feedback = document.getElementById('board-tabs-feedback');
+    if (!feedback) return;
+    feedback.textContent = message || '';
+    feedback.className = `board-tabs-feedback${message ? ' is-visible' : ''}${type ? ` is-${safeClassToken(type, 'info', ['info', 'success', 'error'])}` : ''}`;
+    feedback.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    feedback.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
 }
 
 function _setupBoardDragAndDrop(container) {
@@ -450,17 +696,23 @@ function _setupBoardDragAndDrop(container) {
                 return b;
             });
             
-            // Send requests to backend
+            setBoardTabsFeedback('正在保存板块顺序...');
             try {
-                await Promise.all(newOrder.map(o => 
-                    fetch(`/api/v1/boards/${o.slug}`, {
+                await Promise.all(newOrder.map(async (o) => {
+                    const response = await fetch(`/api/v1/boards/${encodeURIComponent(o.slug)}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ display_order: o.display_order })
-                    })
-                ));
+                    });
+                    if (!response.ok) {
+                        throw new Error(await readResponseError(response, '保存板块顺序失败'));
+                    }
+                }));
+                setBoardTabsFeedback('板块顺序已保存。', 'success');
             } catch (err) {
                 console.error('Failed to save new board order', err);
+                setBoardTabsFeedback(`板块顺序保存失败，已恢复服务器顺序：${err.message}`, 'error');
+                await initBoards();
             }
         });
     });
@@ -533,14 +785,16 @@ function clearWizardReviewPanel() {
 async function loadPromptTemplates() {
     try {
         const res = await fetch('/api/v1/boards/prompts/templates');
-        if (res.ok) {
-            const data = await res.json();
-            // Prefer metadata-rich items; fall back to flat key list
-            availablePromptTemplates = (data.items && data.items.length > 0) ? data.items : (data.templates || []);
-            _populatePromptDropdown();
+        if (!res.ok) {
+            throw new Error(await readResponseError(res, '读取 Prompt 模板失败'));
         }
+        const data = await res.json();
+        // Prefer metadata-rich items; fall back to flat key list
+        availablePromptTemplates = (data.items && data.items.length > 0) ? data.items : (data.templates || []);
+        _populatePromptDropdown();
     } catch (e) {
         console.error('Failed to load prompt templates', e);
+        setBoardFormFeedback('error', `Prompt 模板读取失败：${e.message}。已保留默认模板。`);
     }
 }
 
@@ -1330,7 +1584,7 @@ async function submitWizard(event) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(await readResponseError(res, '板块向导请求失败'));
         const data = await res.json();
 
         // Remove loading placeholder
@@ -1546,7 +1800,7 @@ async function triggerWizardPreview(btn) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ config: wizardLastConfig }),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(await readResponseError(res, '预览抓取失败'));
         const data = await res.json();
         loadingMsg.remove();
         wizardLastPreviewData = data;
@@ -1619,7 +1873,7 @@ async function fixWizardFeeds(brokenUrls) {
             body: JSON.stringify({ topic: wizardTopic || '通用资讯', broken_urls: brokenUrls }),
         });
         loading.remove();
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(await readResponseError(res, '替代源获取失败'));
         const data = await res.json();
         renderWizardAlternatives(Array.isArray(data.alternatives) ? data.alternatives : []);
     } catch (e) {
@@ -1974,8 +2228,16 @@ function renderBoardPreviewResult(data) {
 
 async function readResponseError(response, fallback = '请求失败') {
     try {
-        const data = await response.json();
-        return data?.detail || data?.message || fallback;
+        const text = await response.text();
+        if (!text.trim()) {
+            return fallback;
+        }
+        try {
+            const data = JSON.parse(text);
+            return data?.detail || data?.message || text.trim();
+        } catch {
+            return text.trim();
+        }
     } catch {
         return fallback;
     }
@@ -2152,8 +2414,7 @@ async function previewBoardPrompt() {
             body: JSON.stringify(built.payload),
         });
         if (!res.ok) {
-            const msg = await res.text();
-            throw new Error(msg || `HTTP ${res.status}`);
+            throw new Error(await readResponseError(res, 'Prompt 预览失败'));
         }
         const data = await res.json();
 
@@ -2193,7 +2454,12 @@ async function fetchSummary(force = false, date = null) {
         url += '?' + params.join('&');
     }
     
-    await fetchSummaryWithUrl(url);
+    const loadingMessage = date
+        ? `正在加载 ${formatSummaryDate(date)} 的简报...`
+        : force
+            ? '正在重新生成简报...'
+            : '正在刷新简报...';
+    await fetchSummaryWithUrl(url, loadingMessage);
 }
 
 function _loadCachedSummary() {
@@ -2241,13 +2507,14 @@ function _renderSummaryData(data) {
     renderHome();
     renderRecReport();
     fetchSystemMetrics();
+    setSummaryFeedback('');
 
     loadingState.style.display = 'none';
     contentState.style.display = 'block';
     if (refreshBtn) refreshBtn.style.display = 'inline-flex';
 }
 
-async function fetchSummaryWithUrl(url) {
+async function fetchSummaryWithUrl(url, retainedContentMessage = '正在刷新简报...') {
     // Cancel any in-flight summary fetch (prevents stale board data flickering)
     if (_summaryAbortController) {
         _summaryAbortController.abort();
@@ -2266,11 +2533,13 @@ async function fetchSummaryWithUrl(url) {
             showLoadingState();
             contentState.style.display = 'none';
             if (refreshBtn) refreshBtn.style.display = 'none';
+        } else {
+            setSummaryFeedback(retainedContentMessage, 'info');
         }
 
         const response = await fetch(url, { signal: _summaryAbortController.signal });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(await readResponseError(response, '读取简报失败'));
         }
 
         const data = await response.json();
@@ -2286,6 +2555,9 @@ async function fetchSummaryWithUrl(url) {
         // Only show error state if this is still the latest fetch and we have no cached data
         if (thisFetchId === _summaryFetchId && !hasCachedData) {
             showErrorState(error.message, () => fetchSummary());
+        } else if (thisFetchId === _summaryFetchId) {
+            setSummaryFeedback(`刷新简报失败：${error.message}。当前仍显示上次成功生成的内容。`, 'error');
+            if (refreshBtn) refreshBtn.style.display = 'inline-flex';
         }
     }
 }
@@ -2970,15 +3242,21 @@ function togglePersonaPanel() {
 }
 
 async function loadPersonaTraining() {
+    const container = document.getElementById('persona-training-summary');
     try {
         let url = '/api/v1/persona/training';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const response = await fetch(url);
-        if (response.ok) {
-            renderPersonaTraining(await response.json());
+        if (!response.ok) {
+            throw new Error(await readResponseError(response, '读取训练面板失败'));
         }
+        renderPersonaTraining(await response.json());
     } catch (error) {
         console.error('Failed to load persona training:', error);
+        if (container) {
+            container.innerHTML = `<p class="empty-state-text">训练面板读取失败：${escapeHtml(error.message)}</p>`;
+        }
+        setPersonaFeedback(`训练面板读取失败：${error.message}`, 'error');
     }
 }
 
@@ -3089,8 +3367,12 @@ function renderPersonaTraining(data) {
 }
 
 async function fetchSystemMetrics() {
+    setMetricsStatus('正在刷新系统消耗...');
     try {
         const response = await fetch('/api/v1/metrics');
+        if (!response.ok) {
+            throw new Error(await readResponseError(response, '读取系统消耗失败'));
+        }
         const data = await response.json();
         
         if (data.tokens) {
@@ -3100,22 +3382,49 @@ async function fetchSystemMetrics() {
             document.getElementById('metric-p50').textContent = data.latency.p50_sec > 0 ? `${data.latency.p50_sec} s` : '--';
             document.getElementById('metric-p99').textContent = data.latency.p99_sec > 0 ? `${data.latency.p99_sec} s` : '--';
         }
+        setMetricsStatus('');
     } catch (e) {
         console.error("Failed to load metrics", e);
+        setMetricsStatus(`系统消耗读取失败：${e.message}`, 'error');
     }
+}
+
+function setMetricsStatus(message, type = 'info') {
+    const status = document.getElementById('metrics-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = `metrics-status${message ? ' is-visible' : ''}${type === 'error' ? ' is-error' : ''}`;
+    status.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    status.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
 }
 
 async function loadPersonaData() {
     try {
+        setPersonaFeedback('');
         let url = '/api/v1/persona';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const response = await fetch(url);
-        if (response.ok) {
-            renderPersonaInstructions(await response.json());
+        if (!response.ok) {
+            throw new Error(await readResponseError(response, '请求失败'));
         }
+        renderPersonaInstructions(await response.json());
+        return true;
     } catch (error) {
         console.error('Failed to load persona data:', error);
+        setPersonaFeedback(`读取偏好失败：${error.message}`, 'error');
+        return false;
     }
+}
+
+function setPersonaFeedback(message, type = 'info') {
+    const feedback = document.getElementById('persona-feedback');
+    if (!feedback) return;
+
+    feedback.textContent = message || '';
+    feedback.className = `persona-feedback persona-feedback--${type}`;
+    feedback.classList.toggle('is-visible', !!message);
+    feedback.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    feedback.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
 }
 
 function renderPersonaInstructions(personas) {
@@ -3143,7 +3452,7 @@ function renderPersonaInstructions(personas) {
         removeButton.title = '删除此偏好';
         removeButton.setAttribute('aria-label', '删除此偏好');
         removeButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-        removeButton.addEventListener('click', () => removePersona(persona.id));
+        removeButton.addEventListener('click', () => removePersona(persona.id, removeButton));
 
         item.appendChild(text);
         item.appendChild(removeButton);
@@ -3177,15 +3486,20 @@ function renderRecReport() {
     }
 }
 
-async function removePersona(id) {
+async function removePersona(id, removeButton = null) {
+    if (removeButton) removeButton.disabled = true;
+    setPersonaFeedback('');
     try {
         const response = await fetch(`/api/v1/persona/${id}`, { method: 'DELETE' });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(await readResponseError(response, '请求失败'));
         }
-        await loadPersonaData();
+        const reloaded = await loadPersonaData();
+        if (reloaded) setPersonaFeedback('已删除偏好。', 'success');
     } catch (error) {
         console.error('Failed to delete persona:', error);
+        setPersonaFeedback(`删除偏好失败：${error.message}`, 'error');
+        if (removeButton && removeButton.isConnected) removeButton.disabled = false;
     }
 }
 
@@ -3217,10 +3531,11 @@ async function sendFeedback(buttonElement, url, sentiment, newsItem) {
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(await readResponseError(response, '反馈提交失败'));
         }
 
         updateFeedbackStateInData(url, nextSentiment);
+        clearFeedbackInlineMessage(buttonElement);
 
         // On a fresh positive like, offer the user a chance to declare WHY
         // (capturing abstract intent rather than literal subject).
@@ -3230,6 +3545,7 @@ async function sendFeedback(buttonElement, url, sentiment, newsItem) {
     } catch (error) {
         console.error('Failed to submit feedback:', error);
         applyFeedbackState(likeButton, dislikeButton, currentSentiment);
+        showFeedbackInlineMessage(buttonElement, `反馈提交失败：${error.message}`, 'error');
     } finally {
         const disabled = !isSafeHttpUrlString(url);
         likeButton.disabled = disabled;
@@ -3244,17 +3560,23 @@ async function sendFeedback(buttonElement, url, sentiment, newsItem) {
 async function loadSavedState() {
     try {
         const res = await fetch('/api/v1/saved/urls');
-        if (res.ok) {
-            savedStatusMap = await res.json() || {};
-        }
+        if (!res.ok) throw new Error(await readResponseError(res, '读取收藏状态失败'));
+        savedStatusMap = await res.json() || {};
+        savedStateLoadError = '';
+        syncVisibleSavedButtons();
     } catch (e) {
         console.error('Failed to load saved state', e);
+        savedStateLoadError = e.message || '读取收藏状态失败';
     }
 }
 
 async function toggleSaved(buttonElement, newsItem, status) {
     const url = newsItem.original_link;
     if (!isSafeHttpUrlString(url)) return;
+
+    if (savedStateLoadError) {
+        showFeedbackInlineMessage(buttonElement, `收藏状态可能未同步：${savedStateLoadError}`, 'info');
+    }
 
     const statuses = savedStatusMap[url] || [];
     const isActive = statuses.includes(status);
@@ -3278,7 +3600,7 @@ async function toggleSaved(buttonElement, newsItem, status) {
                     board: currentBoardSlug || '',
                 })
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) throw new Error(await readResponseError(res, '保存状态失败'));
             savedStatusMap[url] = Array.from(new Set([...statuses, status]));
         } else {
             const res = await fetch('/api/v1/saved', {
@@ -3286,16 +3608,39 @@ async function toggleSaved(buttonElement, newsItem, status) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url, status })
             });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) throw new Error(await readResponseError(res, '保存状态失败'));
             savedStatusMap[url] = statuses.filter((s) => s !== status);
             if (savedStatusMap[url].length === 0) delete savedStatusMap[url];
         }
+        clearFeedbackInlineMessage(buttonElement);
     } catch (error) {
         console.error('Failed to toggle saved state:', error);
         buttonElement.classList.toggle('active', isActive);  // revert
+        showFeedbackInlineMessage(buttonElement, `保存状态失败：${error.message}`, 'error');
     } finally {
         buttonElement.disabled = false;
     }
+}
+
+function clearFeedbackInlineMessage(buttonElement) {
+    const container = buttonElement?.closest('.feedback-container');
+    const message = container ? container.querySelector('.feedback-inline-message') : null;
+    if (message) message.remove();
+}
+
+function showFeedbackInlineMessage(buttonElement, message, type = 'error') {
+    const container = buttonElement?.closest('.feedback-container');
+    if (!container) return;
+    clearFeedbackInlineMessage(buttonElement);
+    const messageEl = document.createElement('span');
+    messageEl.className = `feedback-inline-message is-${safeClassToken(type, 'error', ['error', 'info'])}`;
+    messageEl.textContent = message;
+    messageEl.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    messageEl.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+    container.appendChild(messageEl);
+    setTimeout(() => {
+        if (messageEl.isConnected) messageEl.remove();
+    }, 5000);
 }
 
 let currentSavedTab = 'favorite';
@@ -3305,6 +3650,45 @@ function toggleSavedPanel() {
     if (toggleOverlay(panel)) {
         switchSavedTab(currentSavedTab);
     }
+}
+
+function renderSavedStateWarning(container) {
+    if (!container || !savedStateLoadError) return;
+    const warning = document.createElement('div');
+    warning.className = 'saved-state-warning';
+    warning.setAttribute('role', 'status');
+    warning.setAttribute('aria-live', 'polite');
+
+    const message = document.createElement('span');
+    message.textContent = `收藏状态可能未同步：${savedStateLoadError}`;
+
+    const retryButton = document.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'saved-state-warning__retry';
+    retryButton.textContent = '重新同步';
+    retryButton.addEventListener('click', async () => {
+        retryButton.disabled = true;
+        retryButton.textContent = '同步中...';
+        await loadSavedState();
+        renderSavedList(currentSavedTab);
+        syncVisibleSavedButtons();
+    });
+
+    warning.appendChild(message);
+    warning.appendChild(retryButton);
+    container.appendChild(warning);
+}
+
+function syncVisibleSavedButtons() {
+    document.querySelectorAll('.news-card').forEach((card) => {
+        const link = card.querySelector('.read-more');
+        if (!link || !isSafeHttpUrlString(link.href)) return;
+        const statuses = savedStatusMap[link.href] || [];
+        const favoriteButton = card.querySelector('.feedback-btn.favorite');
+        const readLaterButton = card.querySelector('.feedback-btn.read-later');
+        if (favoriteButton) favoriteButton.classList.toggle('active', statuses.includes('favorite'));
+        if (readLaterButton) readLaterButton.classList.toggle('active', statuses.includes('read_later'));
+    });
 }
 
 function switchSavedTab(status) {
@@ -3319,6 +3703,7 @@ async function renderSavedList(status) {
     const container = document.getElementById('saved-list');
     if (!container) return;
     clearElement(container);
+    renderSavedStateWarning(container);
 
     const loading = document.createElement('p');
     loading.className = 'saved-placeholder';
@@ -3326,17 +3711,39 @@ async function renderSavedList(status) {
     container.appendChild(loading);
 
     let items = [];
+    let loadError = '';
     try {
         const res = await fetch(`/api/v1/saved?status=${encodeURIComponent(status)}`);
-        if (res.ok) {
-            const data = await res.json();
-            items = data.items || [];
+        if (!res.ok) {
+            throw new Error(await readResponseError(res, '读取收藏列表失败'));
         }
+        const data = await res.json();
+        items = data.items || [];
     } catch (e) {
         console.error('Failed to load saved list', e);
+        loadError = e.message;
     }
 
     clearElement(container);
+    renderSavedStateWarning(container);
+
+    if (loadError) {
+        const error = document.createElement('div');
+        error.className = 'saved-placeholder saved-placeholder--error';
+        error.setAttribute('role', 'alert');
+        error.setAttribute('aria-live', 'assertive');
+        const errorText = document.createElement('p');
+        errorText.textContent = `读取失败：${loadError}`;
+        const retryButton = document.createElement('button');
+        retryButton.type = 'button';
+        retryButton.className = 'saved-retry-btn';
+        retryButton.textContent = '重试';
+        retryButton.addEventListener('click', () => renderSavedList(status));
+        error.appendChild(errorText);
+        error.appendChild(retryButton);
+        container.appendChild(error);
+        return;
+    }
 
     if (items.length === 0) {
         const empty = document.createElement('p');
@@ -3379,13 +3786,15 @@ async function renderSavedList(status) {
         removeBtn.title = '移除';
         removeBtn.textContent = '×';
         removeBtn.addEventListener('click', async () => {
+            removeBtn.disabled = true;
+            clearSavedItemFeedback(row);
             try {
                 const res = await fetch('/api/v1/saved', {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url: item.url, status })
                 });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                if (!res.ok) throw new Error(await readResponseError(res, '移除失败'));
                 const remaining = (savedStatusMap[item.url] || []).filter((s) => s !== status);
                 if (remaining.length === 0) delete savedStatusMap[item.url];
                 else savedStatusMap[item.url] = remaining;
@@ -3397,6 +3806,8 @@ async function renderSavedList(status) {
                 _syncSavedButtonsForUrl(item.url, status, false);
             } catch (e) {
                 console.error('Failed to remove saved item', e);
+                showSavedItemFeedback(row, `移除失败：${e.message}`);
+                removeBtn.disabled = false;
             }
         });
 
@@ -3404,6 +3815,22 @@ async function renderSavedList(status) {
         row.appendChild(removeBtn);
         container.appendChild(row);
     });
+}
+
+function clearSavedItemFeedback(row) {
+    const message = row?.querySelector('.saved-item__error');
+    if (message) message.remove();
+}
+
+function showSavedItemFeedback(row, message) {
+    if (!row) return;
+    clearSavedItemFeedback(row);
+    const errorEl = document.createElement('div');
+    errorEl.className = 'saved-item__error';
+    errorEl.textContent = message;
+    errorEl.setAttribute('role', 'alert');
+    errorEl.setAttribute('aria-live', 'assertive');
+    row.appendChild(errorEl);
 }
 
 function _syncSavedButtonsForUrl(url, status, active) {
@@ -3445,6 +3872,7 @@ async function showInterestReasonPopup(anchorButton, newsItem) {
     const dismissTimer = setTimeout(() => popup.remove(), 25000);
 
     let options = [];
+    let optionsError = '';
     try {
         const res = await fetch('/api/v1/feedback/interest-options', {
             method: 'POST',
@@ -3455,18 +3883,24 @@ async function showInterestReasonPopup(anchorButton, newsItem) {
                 tags: newsItem.tags || [],
             }),
         });
-        if (res.ok) {
-            const data = await res.json();
-            options = Array.isArray(data.options) ? data.options : [];
-        }
+        if (!res.ok) throw new Error(await readResponseError(res, '偏好选项生成失败'));
+        const data = await res.json();
+        options = Array.isArray(data.options) ? data.options : [];
     } catch (error) {
         console.error('Failed to fetch interest options:', error);
+        optionsError = error.message && error.message !== '偏好选项生成失败'
+            ? error.message
+            : '服务器未返回具体原因';
     }
 
     const optionsContainer = popup.querySelector('.interest-popup__options');
     optionsContainer.innerHTML = '';
     if (options.length === 0) {
-        optionsContainer.innerHTML = '<div class="interest-popup__empty">未能生成选项，可稍后在偏好面板手动添加。</div>';
+        if (optionsError) {
+            showInterestPopupError(popup, `偏好选项生成失败：${optionsError}。可稍后在偏好面板手动添加。`);
+        } else {
+            optionsContainer.innerHTML = '<div class="interest-popup__empty">未能生成选项，可稍后在偏好面板手动添加。</div>';
+        }
         return;
     }
 
@@ -3486,7 +3920,7 @@ async function showInterestReasonPopup(anchorButton, newsItem) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content: opt }),
                 });
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                if (!r.ok) throw new Error(await readResponseError(r, '偏好保存失败'));
                 clearTimeout(dismissTimer);
                 popup.classList.add('saved');
                 popup.querySelector('.interest-popup__options').innerHTML =
@@ -3496,10 +3930,23 @@ async function showInterestReasonPopup(anchorButton, newsItem) {
                 console.error('Failed to save interest reason:', error);
                 chip.disabled = false;
                 chip.classList.remove('saving');
+                showInterestPopupError(popup, `保存失败：${error.message}`);
             }
         });
         optionsContainer.appendChild(chip);
     });
+}
+
+function showInterestPopupError(popup, message) {
+    if (!popup) return;
+    const existing = popup.querySelector('.interest-popup__error');
+    if (existing) existing.remove();
+    const errorEl = document.createElement('div');
+    errorEl.className = 'interest-popup__error';
+    errorEl.textContent = message;
+    errorEl.setAttribute('role', 'alert');
+    errorEl.setAttribute('aria-live', 'assertive');
+    popup.querySelector('.interest-popup__options')?.appendChild(errorEl);
 }
 
 function setupHistoryPanel() {
@@ -3596,6 +4043,12 @@ function renderHistoryInsights(weeklyRecap) {
     statsContainer.appendChild(recapCard);
 }
 
+function renderMagazineRecapError(message) {
+    const statsContainer = document.getElementById('magazine-recap-stats');
+    if (!statsContainer) return;
+    statsContainer.innerHTML = `<p class="magazine-placeholder">周刊概览加载失败：${escapeHtml(message)}</p>`;
+}
+
 async function triggerWeeklyInsight() {
     const content = document.getElementById('weekly-insight-content');
     const genBtn = document.getElementById('gen-weekly-btn');
@@ -3618,24 +4071,27 @@ async function triggerWeeklyInsight() {
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const response = await fetch(url);
         
-        if (!response.ok) throw new Error('Generation failed');
+        if (!response.ok) throw new Error(await readResponseError(response, '周刊生成失败'));
         
         const data = await response.json();
         
         clearElement(content);
-        
-        content.innerHTML = renderMarkdownSafe(data.weekly_insight || '');
+        const weeklyInsight = (data.weekly_insight || '').trim();
+        if (!weeklyInsight) {
+            throw new Error('周刊生成完成，但没有返回可展示内容。');
+        }
+        content.innerHTML = renderMarkdownSafe(weeklyInsight);
 
     } catch (error) {
         clearElement(content);
-        genBtn.style.opacity = '1';
-        genBtn.disabled = false;
-        genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 生成本周深度汇总';
-        
         const err = document.createElement('p');
         err.className = 'error-message';
-        err.textContent = '周刊生成出了点意外，请稍后再试。';
+        err.textContent = `周刊生成失败：${error.message}`;
         content.appendChild(err);
+    } finally {
+        genBtn.style.opacity = '1';
+        genBtn.disabled = false;
+        genBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.4rem; vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> 重新生成本周深度汇总';
     }
 }
 
@@ -3685,7 +4141,7 @@ async function loadHistoryData(target = 'history') {
         let url = '/api/v1/history';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const response = await fetch(url);
-        if (!response.ok) throw new Error('Failed to fetch history');
+        if (!response.ok) throw new Error(await readResponseError(response, '读取历史记录失败'));
 
         const historyData = await response.json();
         latestHistoryArchive = Array.isArray(historyData.archive_items) ? historyData.archive_items : [];
@@ -3770,12 +4226,18 @@ async function loadHistoryData(target = 'history') {
     } catch (error) {
         console.error('History load error:', error);
         latestHistoryArchive = [];
+        if (target === 'magazine') {
+            renderMagazineRecapError(error.message);
+            return;
+        }
         renderHistoryInsights(null);
-        clearElement(listContainer);
-        const err = document.createElement('p');
-        err.className = 'history-hint';
-        err.textContent = '加载失败，请重试。';
-        listContainer.appendChild(err);
+        if (listContainer) {
+            clearElement(listContainer);
+            const err = document.createElement('p');
+            err.className = 'history-hint';
+            err.textContent = `历史记录加载失败：${error.message}`;
+            listContainer.appendChild(err);
+        }
     }
 }
 
@@ -3844,21 +4306,25 @@ async function openRagPanel(url, headline) {
 
     try {
         const historyRes = await fetch(`/api/v1/rag/history?url=${encodeURIComponent(panelUrl)}`);
-        if (historyRes.ok) {
-            const historyData = await historyRes.json();
-            if (currentUrl !== panelUrl) {
-                return;
-            }
-            if (Array.isArray(historyData.history) && historyData.history.length > 0) {
-                historyData.history.forEach((message) => {
-                    const role = message.role === 'assistant' ? 'ai' : message.role;
-                    appendMessage(role, message.content);
-                });
-                appendMessage('system', '以上为之前的对话记录');
-            }
+        if (!historyRes.ok) {
+            throw new Error(await readResponseError(historyRes, '读取追问历史失败'));
+        }
+        const historyData = await historyRes.json();
+        if (currentUrl !== panelUrl) {
+            return;
+        }
+        if (Array.isArray(historyData.history) && historyData.history.length > 0) {
+            historyData.history.forEach((message) => {
+                const role = message.role === 'assistant' ? 'ai' : message.role;
+                appendMessage(role, message.content);
+            });
+            appendMessage('system', '以上为之前的对话记录');
         }
     } catch (error) {
         console.error('Failed to load history:', error);
+        if (currentUrl === panelUrl) {
+            appendMessage('system', `追问历史读取失败：${error.message}。你仍可继续提问。`);
+        }
     }
 
     if (currentUrl !== panelUrl) {
@@ -3885,7 +4351,10 @@ async function openRagPanel(url, headline) {
                 signal: currentOverviewController.signal
             });
 
-            if (!response.ok || !response.body) {
+            if (!response.ok) {
+                throw new Error(await readResponseError(response, '详细概要生成失败，但你仍可继续提问。'));
+            }
+            if (!response.body) {
                 throw new Error('详细概要生成失败，但你仍可继续提问。');
             }
 
@@ -3934,13 +4403,19 @@ async function openRagPanel(url, headline) {
     let alreadyIngested = false;
     try {
         const statusRes = await fetch(`/api/v1/rag/ingest_status?url=${encodeURIComponent(panelUrl)}`);
-        if (statusRes.ok) {
-            const statusData = await statusRes.json();
-            if (statusData.status === 'done') {
-                alreadyIngested = true;
-            }
+        if (!statusRes.ok) {
+            throw new Error(await readResponseError(statusRes, '索引状态读取失败'));
         }
-    } catch (_) { /* ignore – will fall through to ingest */ }
+        const statusData = await statusRes.json();
+        if (statusData.status === 'done') {
+            alreadyIngested = true;
+        }
+    } catch (error) {
+        console.error('Failed to load ingest status:', error);
+        if (currentUrl === panelUrl) {
+            appendMessage('system', `索引状态读取失败：${error.message}。将重新检查原文。`);
+        }
+    }
 
     if (alreadyIngested) {
         const ingestMessage = appendMessage('system', '知识索引已就绪，你可以直接提问。');
@@ -3958,7 +4433,7 @@ async function openRagPanel(url, headline) {
             });
 
             if (!response.ok) {
-                throw new Error('文章索引失败，请检查该链接是否可访问。');
+                throw new Error(await readResponseError(response, '文章索引失败，请检查该链接是否可访问。'));
             }
 
             const data = await response.json();
@@ -4031,9 +4506,8 @@ async function runRagQuery(question) {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const message = errorData.detail || `HTTP ${response.status}`;
-            setAiMessageText(aiMessage, `错误: ${message}`);
+            const message = await readResponseError(response, '请求失败');
+            setAiMessageText(aiMessage, `提问失败：${message}`);
             return;
         }
 
@@ -4079,7 +4553,7 @@ async function runRagQuery(question) {
         }
     } catch (error) {
         if (error.name !== 'AbortError') {
-            setAiMessageText(aiMessage, `连接错误: ${error.message}`);
+            setAiMessageText(aiMessage, `连接中断：${error.message}`);
         }
     } finally {
         if (currentQueryController && currentQueryController.signal.aborted) {
@@ -4349,6 +4823,7 @@ async function loadExplicitPreferences() {
         let url = '/api/v1/preferences';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const res = await fetch(url);
+        if (!res.ok) throw new Error(await readResponseError(res, '读取显式偏好失败'));
         const data = await res.json();
         for (const cat of ['focus_topic', 'block_topic', 'prefer_source', 'avoid_source']) {
             renderPrefTags(cat, data[cat] || []);
@@ -4356,6 +4831,7 @@ async function loadExplicitPreferences() {
         _refreshAllSuggestions();
     } catch (e) {
         console.error('Failed to load preferences', e);
+        setPersonaFeedback(`读取显式偏好失败：${e.message}`, 'error');
     }
 }
 
@@ -4377,7 +4853,7 @@ function renderPrefTags(category, items) {
         button.type = 'button';
         button.setAttribute('aria-label', '删除偏好');
         button.textContent = '×';
-        button.addEventListener('click', () => deletePrefTag(item.id));
+        button.addEventListener('click', () => deletePrefTag(item.id, button));
 
         tag.appendChild(button);
         container.appendChild(tag);
@@ -4388,34 +4864,50 @@ async function addPrefTag(category) {
     const input = document.getElementById(`pref-input-${category}`);
     const content = input.value.trim();
     if (!content) return;
+    const button = input.closest('.pref-add-row')?.querySelector('button');
+    if (button) button.disabled = true;
+    setPersonaFeedback('');
     try {
         let url = '/api/v1/persona';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
-        await fetch(url, {
+        const res = await fetch(url, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({content, category}),
         });
+        if (!res.ok) throw new Error(await readResponseError(res, '添加偏好失败'));
         input.value = '';
-        loadExplicitPreferences();
+        await loadExplicitPreferences();
+        setPersonaFeedback('偏好已添加。', 'success');
     } catch (e) {
         console.error('Failed to add preference', e);
+        setPersonaFeedback(`添加偏好失败：${e.message}`, 'error');
+    } finally {
+        if (button) button.disabled = false;
     }
 }
 
-async function deletePrefTag(id) {
+async function deletePrefTag(id, button = null) {
+    if (button) button.disabled = true;
+    setPersonaFeedback('');
     try {
-        await fetch(`/api/v1/persona/${id}`, {method: 'DELETE'});
-        loadExplicitPreferences();
+        const res = await fetch(`/api/v1/persona/${id}`, {method: 'DELETE'});
+        if (!res.ok) throw new Error(await readResponseError(res, '删除偏好失败'));
+        await loadExplicitPreferences();
+        setPersonaFeedback('偏好已删除。', 'success');
     } catch (e) {
         console.error('Failed to delete preference', e);
+        setPersonaFeedback(`删除偏好失败：${e.message}`, 'error');
+        if (button && button.isConnected) button.disabled = false;
     }
 }
 
 async function loadPrefSuggestions() {
+    const suggestionErrors = [];
     // Source suggestions: all enabled sources from DB + any extra names seen in today's data
     try {
         const res = await fetch('/api/v1/admin/sources/health');
+        if (!res.ok) throw new Error(await readResponseError(res, '读取来源建议失败'));
         const rows = await res.json();
         const dbNames = rows.filter(r => r.enabled).map(r => r.name).filter(Boolean);
         const todayNames = latestData
@@ -4425,6 +4917,7 @@ async function loadPrefSuggestions() {
         _prefSuggestionData.sources = merged;
     } catch (e) {
         console.error('Failed to load source list', e);
+        suggestionErrors.push(`来源建议读取失败：${e.message}`);
         if (latestData) {
             const stats = latestData.source_stats || computeSourceStats(latestData.top_news || []);
             _prefSuggestionData.sources = Object.keys(stats).sort();
@@ -4436,13 +4929,19 @@ async function loadPrefSuggestions() {
         let url = '/api/v1/insights/trending?top_n=15';
         if (currentBoardSlug) url += `&board=${encodeURIComponent(currentBoardSlug)}`;
         const res = await fetch(url);
+        if (!res.ok) throw new Error(await readResponseError(res, '读取话题建议失败'));
         const data = await res.json();
         _prefSuggestionData.topics = (data.trending || []).map(t => t.topic).filter(Boolean);
     } catch (e) {
         console.error('Failed to load trending topics for suggestions', e);
+        suggestionErrors.push(`话题建议读取失败：${e.message}`);
     }
 
     _refreshAllSuggestions();
+    if (suggestionErrors.length > 0) {
+        renderSuggestionWarnings(suggestionErrors);
+        setPersonaFeedback(`${suggestionErrors.join('；')}。你仍可手动添加偏好。`, 'info');
+    }
 }
 
 function _refreshAllSuggestions() {
@@ -4487,6 +4986,29 @@ function _renderSuggestions(category, allItems) {
     });
 }
 
+function renderSuggestionWarnings(messages) {
+    const topicFailed = messages.some(message => message.startsWith('话题建议'));
+    const sourceFailed = messages.some(message => message.startsWith('来源建议'));
+    const categoryMessages = {
+        focus_topic: topicFailed ? '话题建议加载失败，可手动输入。' : '',
+        block_topic: topicFailed ? '话题建议加载失败，可手动输入。' : '',
+        prefer_source: sourceFailed ? '来源建议加载失败，可手动输入。' : '',
+        avoid_source: sourceFailed ? '来源建议加载失败，可手动输入。' : '',
+    };
+
+    Object.entries(categoryMessages).forEach(([category, message]) => {
+        if (!message) return;
+        const container = document.getElementById(`pref-suggestions-${category}`);
+        if (!container) return;
+        const warning = document.createElement('span');
+        warning.className = 'pref-suggestion-warning';
+        warning.textContent = message;
+        warning.setAttribute('role', 'status');
+        warning.setAttribute('aria-live', 'polite');
+        container.appendChild(warning);
+    });
+}
+
 async function quickAddPref(category, content) {
     const input = document.getElementById(`pref-input-${category}`);
     if (input) input.value = content;
@@ -4502,17 +5024,21 @@ async function fetchHeatmap() {
     if (!container) return;
     const daysSelect = document.getElementById('heatmap-days');
     const days = daysSelect ? daysSelect.value : 7;
+    const wasDaysSelectDisabled = daysSelect ? daysSelect.disabled : false;
 
     container.innerHTML = '<p class="heatmap-placeholder">正在加载话题热度...</p>';
+    if (daysSelect) daysSelect.disabled = true;
 
     try {
         const res = await fetch(`/api/v1/insights/heatmap?days=${days}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(await readResponseError(res, '读取话题热度失败'));
         const data = await res.json();
         renderHeatmap(data, container);
     } catch (e) {
         console.error('Failed to fetch heatmap', e);
         container.innerHTML = `<p class="heatmap-placeholder">加载失败: ${escapeHtml(e.message)}</p>`;
+    } finally {
+        if (daysSelect) daysSelect.disabled = wasDaysSelectDisabled;
     }
 }
 
@@ -4608,21 +5134,35 @@ function renderHeatmap(data, container) {
 async function fetchEntityTimeline() {
     const input = document.getElementById('entity-input');
     const container = document.getElementById('timeline-container');
+    const button = document.getElementById('entity-search-btn');
     if (!input || !container) return;
 
     const entity = input.value.trim();
-    if (!entity) return;
+    if (!entity) {
+        container.innerHTML = '<p class="timeline-placeholder">请输入要搜索的实体名称。</p>';
+        input.focus();
+        return;
+    }
 
     container.innerHTML = '<p class="timeline-placeholder">正在搜索...</p>';
+    if (button) {
+        button.disabled = true;
+        button.textContent = '搜索中...';
+    }
 
     try {
         const res = await fetch(`/api/v1/insights/timeline?entity=${encodeURIComponent(entity)}&days=30`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) throw new Error(await readResponseError(res, '搜索实体时间线失败'));
         const data = await res.json();
         renderEntityTimeline(data, container);
     } catch (e) {
         console.error('Failed to fetch entity timeline', e);
         container.innerHTML = `<p class="timeline-placeholder">搜索失败: ${escapeHtml(e.message)}</p>`;
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = '搜索';
+        }
     }
 }
 
@@ -4794,7 +5334,7 @@ async function refreshSilentModeStatus() {
         currentSilentModeStatus = null;
         summaryEl.textContent = '静默模式状态读取失败。';
         badgeEl.textContent = '异常';
-        badgeEl.className = 'sources-silent-mode-badge is-off';
+        badgeEl.className = 'sources-silent-mode-badge is-error';
         metaEl.innerHTML = `<span>${escapeHtml(error.message)}</span>`;
         if (historyEl) {
             historyEl.innerHTML = '<div class="sources-silent-mode-history__title">最近运行</div><div class="sources-placeholder">读取失败</div>';
@@ -4804,10 +5344,15 @@ async function refreshSilentModeStatus() {
 
 async function runSilentModeNow() {
     const resultEl = document.getElementById('silent-mode-result');
+    const runBtn = document.querySelector('.sources-silent-mode-actions .sources-add-btn');
     if (!resultEl) return;
     resultEl.style.display = 'block';
     resultEl.className = 'sources-silent-mode-result';
     resultEl.textContent = '正在执行静默采集...';
+    if (runBtn) {
+        runBtn.disabled = true;
+        runBtn.textContent = '运行中...';
+    }
 
     try {
         const res = await fetch('/api/v1/silent-mode/run', {
@@ -4841,6 +5386,11 @@ async function runSilentModeNow() {
     } catch (error) {
         resultEl.className = 'sources-silent-mode-result is-error';
         resultEl.textContent = `运行失败：${error.message}`;
+    } finally {
+        if (runBtn) {
+            runBtn.disabled = false;
+            runBtn.textContent = '立即运行';
+        }
     }
 }
 
@@ -4952,13 +5502,15 @@ async function loadSourcesForCurrentBoard() {
         if (!sourcesRes.ok) throw new Error(await readResponseError(sourcesRes, '读取失败'));
         const sources = await sourcesRes.json();
         let enrichedById = new Map();
+        let dashboardError = '';
         if (dashboardRes.ok) {
             currentSourceDashboard = await dashboardRes.json();
             enrichedById = new Map((currentSourceDashboard.sources || []).map(source => [source.id, source]));
             renderSourceDashboard(currentSourceDashboard, dashboardEl, coverageEl);
         } else {
+            dashboardError = await readResponseError(dashboardRes, '来源仪表盘读取失败');
             currentSourceDashboard = null;
-            if (dashboardEl) dashboardEl.innerHTML = '<p class="sources-placeholder">来源仪表盘读取失败</p>';
+            if (dashboardEl) dashboardEl.innerHTML = `<p class="sources-placeholder">来源仪表盘读取失败：${escapeHtml(dashboardError)}</p>`;
             if (trendEl) {
                 trendEl.style.display = 'none';
                 trendEl.innerHTML = '';
@@ -5283,7 +5835,7 @@ function renderFeedList(sources, container) {
             } catch (e) {
                 source.credibility_override = previousValue;
                 credibilitySelect.value = previousValue;
-                alert('更新可信度失败: ' + e.message);
+                setSourceManagementFeedback(`更新可信度失败：${e.message}`, 'error');
             } finally {
                 credibilitySelect.disabled = false;
             }
@@ -5342,7 +5894,7 @@ function renderFeedList(sources, container) {
         const testBtn = document.createElement('button');
         testBtn.className = 'source-feed-test-btn';
         testBtn.textContent = '测试';
-        testBtn.addEventListener('click', () => testExistingFeed(statusKey, url));
+        testBtn.addEventListener('click', () => testExistingFeed(statusKey, url, testBtn));
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'source-feed-del-btn';
@@ -5379,15 +5931,30 @@ async function updateSourceCredibility(sourceId, credibilityOverride) {
     }
 }
 
+function setSourceManagementFeedback(message, type = 'info') {
+    const resultEl = document.getElementById('source-test-result');
+    if (!resultEl) return;
+    resultEl.style.display = 'block';
+    resultEl.className = `source-test-result ${type === 'error' ? 'test-fail' : type === 'ok' ? 'test-ok' : ''}`.trim();
+    resultEl.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    resultEl.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+    resultEl.textContent = message;
+}
+
 async function discoverSourceFeeds() {
     const board = _getCurrentBoardObj();
     const input = document.getElementById('discover-source-query');
     const panel = document.getElementById('sources-discovery-result');
+    const button = document.getElementById('sources-discover-btn');
     if (!board || !panel) return;
 
     const query = (input?.value || '').trim();
     panel.style.display = 'block';
     panel.innerHTML = '<p class="sources-placeholder">正在寻找并验证可用 RSS 来源...</p>';
+    if (button) {
+        button.disabled = true;
+        button.textContent = '发现中...';
+    }
 
     try {
         const res = await fetch(`/api/v1/boards/${encodeURIComponent(board.slug)}/sources/discover`, {
@@ -5401,6 +5968,11 @@ async function discoverSourceFeeds() {
     } catch (e) {
         panel.style.display = 'block';
         panel.innerHTML = `<p class="sources-placeholder">来源发现失败：${escapeHtml(e.message)}</p>`;
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = '智能发现';
+        }
     }
 }
 
@@ -5458,15 +6030,19 @@ function renderDiscoveredSources(data) {
     `;
 
     panel.querySelectorAll('.js-add-discovered-source').forEach((button) => {
-        button.addEventListener('click', () => addDiscoveredSource(button.dataset.sourceUrl || ''));
+        button.addEventListener('click', () => addDiscoveredSource(button.dataset.sourceUrl || '', button));
     });
 }
 
-async function addDiscoveredSource(url) {
+async function addDiscoveredSource(url, button = null) {
     const board = _getCurrentBoardObj();
     url = String(url || '').trim();
     if (!board || !url) return;
 
+    if (button) {
+        button.disabled = true;
+        button.textContent = '添加中...';
+    }
     try {
         const res = await fetch(`/api/v1/boards/${encodeURIComponent(board.slug)}/sources`, {
             method: 'POST',
@@ -5482,7 +6058,16 @@ async function addDiscoveredSource(url) {
             panel.innerHTML = `<p class="sources-discovery-footnote">已将 ${escapeHtml(url)} 添加到当前板块。</p>`;
         }
     } catch (e) {
-        alert('添加来源失败: ' + e.message);
+        const panel = document.getElementById('sources-discovery-result');
+        if (panel) {
+            panel.style.display = 'block';
+            panel.innerHTML = `<p class="sources-placeholder">添加来源失败：${escapeHtml(e.message)}</p>`;
+        }
+        setSourceManagementFeedback(`添加来源失败：${e.message}`, 'error');
+        if (button && button.isConnected) {
+            button.disabled = false;
+            button.textContent = '添加到当前板块';
+        }
     }
 }
 
@@ -5553,7 +6138,7 @@ function renderSourceAlternatives(data, sourceId) {
 
     panel.querySelectorAll('.js-apply-source-alternative').forEach((button) => {
         button.addEventListener('click', () => {
-            applySourceAlternative(Number(button.dataset.sourceId), button.dataset.sourceUrl || '');
+            applySourceAlternative(Number(button.dataset.sourceId), button.dataset.sourceUrl || '', button);
         });
     });
 }
@@ -5565,11 +6150,15 @@ function closeSourceAlternatives() {
     panel.innerHTML = '';
 }
 
-async function applySourceAlternative(sourceId, url) {
+async function applySourceAlternative(sourceId, url, button = null) {
     const board = _getCurrentBoardObj();
     url = String(url || '').trim();
     if (!board || !url) return;
 
+    if (button) {
+        button.disabled = true;
+        button.textContent = '应用中...';
+    }
     try {
         const res = await fetch(`/api/v1/boards/${encodeURIComponent(board.slug)}/sources/${encodeURIComponent(sourceId)}`, {
             method: 'PATCH',
@@ -5589,6 +6178,10 @@ async function applySourceAlternative(sourceId, url) {
             errorEl.textContent = `应用替换失败：${e.message}`;
             panel.appendChild(errorEl);
         }
+        if (button && button.isConnected) {
+            button.disabled = false;
+            button.textContent = '采用这个';
+        }
     }
 }
 
@@ -5597,7 +6190,16 @@ async function testSourceFeed() {
     const resultEl = document.getElementById('source-test-result');
     const url = input.value.trim();
 
-    if (!url) return;
+    if (!url) {
+        setSourceManagementFeedback('请先输入 RSS 源 URL。', 'error');
+        input.focus();
+        return;
+    }
+    if (!isSafeHttpUrlString(url)) {
+        setSourceManagementFeedback('RSS 源 URL 必须以 http:// 或 https:// 开头。', 'error');
+        input.focus();
+        return;
+    }
 
     resultEl.style.display = 'block';
     resultEl.className = 'source-test-result';
@@ -5609,6 +6211,7 @@ async function testSourceFeed() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({url}),
         });
+        if (!res.ok) throw new Error(await readResponseError(res, '测试信息源失败'));
         const data = await res.json();
 
         if (data.ok) {
@@ -5643,10 +6246,14 @@ function renderSourceTestStatus(statusEl, result) {
     }
 }
 
-async function testExistingFeed(statusKey, url) {
+async function testExistingFeed(statusKey, url, button = null) {
     const statusEl = document.getElementById(`source-status-${statusKey}`);
     if (!statusEl) return;
 
+    if (button) {
+        button.disabled = true;
+        button.textContent = '测试中...';
+    }
     statusEl.className = 'source-feed-status status-testing';
     statusEl.textContent = '测试中…';
 
@@ -5656,12 +6263,18 @@ async function testExistingFeed(statusKey, url) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({url}),
         });
+        if (!res.ok) throw new Error(await readResponseError(res, '测试信息源失败'));
         const data = await res.json();
         renderSourceTestStatus(statusEl, data);
     } catch (e) {
         statusEl.className = 'source-feed-status status-fail';
         statusEl.textContent = '✗ 异常';
         statusEl.title = e.message;
+    } finally {
+        if (button && button.isConnected) {
+            button.disabled = false;
+            button.textContent = '测试';
+        }
     }
 }
 
@@ -5706,17 +6319,31 @@ function _getCurrentFeeds() {
 
 async function addSourceFeed() {
     const input = document.getElementById('new-source-url');
+    const addButton = document.getElementById('source-add-btn');
     const url = input.value.trim();
-    if (!url) return;
+    if (!url) {
+        setSourceManagementFeedback('请先输入 RSS 源 URL。', 'error');
+        input.focus();
+        return;
+    }
+    if (!isSafeHttpUrlString(url)) {
+        setSourceManagementFeedback('RSS 源 URL 必须以 http:// 或 https:// 开头。', 'error');
+        input.focus();
+        return;
+    }
     const board = _getCurrentBoardObj();
     if (!board) return;
 
     const feeds = _getCurrentFeeds();
     if (feeds.includes(url)) {
-        alert('此信息源已存在');
+        setSourceManagementFeedback('此信息源已存在。', 'error');
         return;
     }
 
+    if (addButton) {
+        addButton.disabled = true;
+        addButton.textContent = '添加中...';
+    }
     try {
         const res = await fetch(`/api/v1/boards/${encodeURIComponent(board.slug)}/sources`, {
             method: 'POST',
@@ -5728,8 +6355,14 @@ async function addSourceFeed() {
         document.getElementById('source-test-result').style.display = 'none';
         await initBoards();
         await loadSourcesForCurrentBoard();
+        setSourceManagementFeedback('信息源已添加。', 'ok');
     } catch (e) {
-        alert('添加失败: ' + e.message);
+        setSourceManagementFeedback(`添加失败：${e.message}`, 'error');
+    } finally {
+        if (addButton) {
+            addButton.disabled = false;
+            addButton.textContent = '+ 添加';
+        }
     }
 }
 
@@ -5748,8 +6381,9 @@ async function deleteSourceFeed(sourceId) {
         if (!res.ok) throw new Error(await readResponseError(res, '删除失败'));
         await initBoards();
         await loadSourcesForCurrentBoard();
+        setSourceManagementFeedback('信息源已删除。', 'ok');
     } catch (e) {
-        alert('删除失败: ' + e.message);
+        setSourceManagementFeedback(`删除失败：${e.message}`, 'error');
     }
 }
 
@@ -5763,7 +6397,7 @@ async function _loadCatchupConfig() {
         let url = '/api/v1/catchup/status';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const resp = await fetch(url);
-        if (!resp.ok) return;
+        if (!resp.ok) throw new Error(await readResponseError(resp, '读取补读设置失败'));
         const data = await resp.json();
         const days = data.catchup_days != null ? data.catchup_days : 7;
         const chk = document.getElementById('catchup-auto-chk');
@@ -5772,7 +6406,19 @@ async function _loadCatchupConfig() {
         if (chk) chk.checked = days > 0;
         if (sel) sel.value = String(days);
         if (hint) hint.textContent = days > 0 ? '开启后，未读条目将自动混入今日简报' : '自动补读已关闭';
-    } catch (_) { /* non-critical */ }
+        setCatchupConfigStatus('');
+    } catch (error) {
+        setCatchupConfigStatus(`补读设置读取失败：${error.message}`, 'error');
+    }
+}
+
+function setCatchupConfigStatus(message, type = 'info') {
+    const status = document.getElementById('catchup-config-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = `catchup-config-status${message ? ' is-visible' : ''}${type === 'error' ? ' is-error' : type === 'success' ? ' is-success' : ''}`;
+    status.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    status.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
 }
 
 async function toggleAutoCatchup(enabled) {
@@ -5795,28 +6441,37 @@ async function updateCatchupDays(days) {
     const chk = document.getElementById('catchup-auto-chk');
     if (chk) chk.checked = days > 0;
     if (hint) hint.textContent = days > 0 ? '开启后，未读条目将自动混入今日简报' : '自动补读已关闭';
+    setCatchupConfigStatus('正在保存补读设置...');
     try {
         const slug = currentBoardSlug || '';
         if (!slug) return;
-        await fetch(`/api/v1/boards/${encodeURIComponent(slug)}`, {
+        const response = await fetch(`/api/v1/boards/${encodeURIComponent(slug)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ catchup_days: days }),
         });
-    } catch (_) { /* non-critical */ }
+        if (!response.ok) {
+            throw new Error(await readResponseError(response, '保存补读设置失败'));
+        }
+        setCatchupConfigStatus('补读设置已保存。', 'success');
+    } catch (error) {
+        setCatchupConfigStatus(`补读设置保存失败，已恢复服务器设置：${error.message}`, 'error');
+        await _loadCatchupConfig();
+    }
 }
 
 async function _refreshCatchupBadge() {
+    const badge = document.getElementById('catchup-badge');
     try {
         let url = '/api/v1/catchup/status';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const resp = await fetch(url);
-        if (!resp.ok) return;
+        if (!resp.ok) throw new Error(await readResponseError(resp, '读取未读状态失败'));
         const data = await resp.json();
         const unreadArticles = data.unread_article_count != null ? data.unread_article_count : (data.unviewed_count || 0);
         const count = unreadArticles + (data.gap_count || 0);
-        const badge = document.getElementById('catchup-badge');
         if (badge) {
+            clearCatchupBadgeError(badge);
             if (count > 0) {
                 badge.textContent = count;
                 badge.style.display = 'inline';
@@ -5824,7 +6479,26 @@ async function _refreshCatchupBadge() {
                 badge.style.display = 'none';
             }
         }
-    } catch (_) { /* non-critical */ }
+    } catch (error) {
+        console.error('Failed to refresh catchup badge:', error);
+        if (badge) {
+            showCatchupBadgeError(badge, error.message || '读取未读状态失败');
+        }
+    }
+}
+
+function clearCatchupBadgeError(badge) {
+    badge.classList.remove('is-error');
+    badge.removeAttribute('title');
+    badge.removeAttribute('aria-label');
+}
+
+function showCatchupBadgeError(badge, message) {
+    badge.textContent = '!';
+    badge.style.display = 'inline';
+    badge.classList.add('is-error');
+    badge.title = `补读状态读取失败：${message}`;
+    badge.setAttribute('aria-label', `补读状态读取失败：${message}`);
 }
 
 function toggleCatchupPanel() {
@@ -5844,7 +6518,7 @@ async function _loadCatchupStatus() {
         let url = '/api/v1/catchup/status';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const resp = await fetch(url);
-        if (!resp.ok) throw new Error('Failed');
+        if (!resp.ok) throw new Error(await readResponseError(resp, '读取未读状态失败'));
         const data = await resp.json();
 
         const unreadArticles = data.unread_article_count != null ? data.unread_article_count : (data.unviewed_count || 0);
@@ -5882,8 +6556,8 @@ async function _loadCatchupStatus() {
             });
             if (genBtn) genBtn.style.display = '';
         }
-    } catch (_) {
-        statusEl.innerHTML = '<p class="catchup-placeholder">检查未读状态失败</p>';
+    } catch (error) {
+        statusEl.innerHTML = `<p class="catchup-placeholder">检查未读状态失败：${escapeHtml(error.message)}</p>`;
     }
 }
 
@@ -5906,8 +6580,7 @@ async function triggerCatchupDigest() {
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const resp = await fetch(url, { method: 'POST' });
         if (!resp.ok) {
-            const errData = await resp.json().catch(() => ({}));
-            throw new Error(errData.detail || 'Failed');
+            throw new Error(await readResponseError(resp, '生成补读失败'));
         }
         const data = await resp.json();
 
@@ -5950,8 +6623,8 @@ async function triggerCatchupDigest() {
             contentEl.innerHTML = html;
         }
 
-        // Refresh badge
-        _refreshCatchupBadge();
+        await _loadCatchupStatus();
+        await _refreshCatchupBadge();
     } catch (error) {
         contentEl.innerHTML = `<p class="catchup-placeholder">生成失败：${escapeHtml(error.message)}</p>`;
     } finally {
@@ -6035,7 +6708,7 @@ async function testAllFeeds() {
         let url = '/api/v1/sources/test_all';
         if (currentBoardSlug) url += `?board=${encodeURIComponent(currentBoardSlug)}`;
         const res = await fetch(url, { method: 'POST' });
-        if (!res.ok) throw new Error('Request failed');
+        if (!res.ok) throw new Error(await readResponseError(res, '测试全部信息源失败'));
         const results = await res.json();
 
         const resultList = Array.isArray(results) ? results : [];
@@ -6046,8 +6719,10 @@ async function testAllFeeds() {
             const result = resultByUrl.get(source.url) || resultList[index];
             renderSourceTestStatus(statusEl, result);
         });
+        setSourceManagementFeedback('全部信息源测试完成。', 'ok');
     } catch (e) {
         console.error('Test all feeds failed:', e);
+        setSourceManagementFeedback(`测试全部信息源失败：${e.message}`, 'error');
     } finally {
         btn.disabled = false;
         btn.textContent = '测试全部';

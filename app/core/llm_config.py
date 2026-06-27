@@ -8,7 +8,6 @@ without cross-layer coupling.
 
 from __future__ import annotations
 
-
 # Well-known provider base URLs
 PROVIDER_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
@@ -60,6 +59,7 @@ def parse_tier_spec(
 # ---------------------------------------------------------------------------
 # Output language control
 # ---------------------------------------------------------------------------
+
 
 def language_directive(code: str | None) -> str:
     """Return a system-prompt directive that forces the LLM output language.

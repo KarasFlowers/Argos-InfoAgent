@@ -11,18 +11,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, UTC
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 import numpy as np
 
 from app.core.config import settings
 from app.services.rag._state import (
-    get_bi_encoder,
-    get_cross_encoder,
     _get_chroma_client,
     _ingested_urls,
-    _bm25_indices,
+    get_bi_encoder,
+    get_cross_encoder,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,16 +31,14 @@ logger = logging.getLogger(__name__)
 # HyDE (Hypothetical Document Embedding) query rewriting
 # -------------------------------------------------------------------
 
+
 async def _hyde_rewrite(question: str) -> str:
     """
     HyDE: ask the LLM to generate a short hypothetical answer.
     This answer will be embedded alongside the original query to
     improve semantic recall for vague or short questions.
     """
-    prompt = (
-        "请直接给出一段简短的假设性回答（50-100 字），不要加前缀或解释：\n\n"
-        f"问题：{question}"
-    )
+    prompt = "请直接给出一段简短的假设性回答（50-100 字），不要加前缀或解释：\n\n" f"问题：{question}"
     try:
         from app.services.llm_service import llm_service
 
@@ -50,7 +47,7 @@ async def _hyde_rewrite(question: str) -> str:
             max_tokens=150,
             temperature=0.7,
         )
-            
+
         hyde_text = (resp.choices[0].message.content or "").strip()
         if hyde_text:
             logger.debug("HyDE hypothesis: %s", hyde_text[:80])
@@ -63,6 +60,7 @@ async def _hyde_rewrite(question: str) -> str:
 # -------------------------------------------------------------------
 # Single-article retrieval (Recall + Rerank)
 # -------------------------------------------------------------------
+
 
 async def _recall_and_rerank(question: str, url: str, top_k_recall: int = 20, top_k_final: int = 3) -> list[dict]:
     """
@@ -78,9 +76,9 @@ async def _recall_and_rerank(question: str, url: str, top_k_recall: int = 20, to
     collection_name = _ingested_urls.get(url)
     if not collection_name:
         return []
-    
+
     collection = _get_chroma_client().get_collection(collection_name)
-    
+
     # --- PATH A: Bi-Encoder (Vector) Recall ---
     bi_encoder = get_bi_encoder()
 
@@ -88,9 +86,7 @@ async def _recall_and_rerank(question: str, url: str, top_k_recall: int = 20, to
     if settings.RAG_HYDE_ENABLED:
         hyde_text = await _hyde_rewrite(question)
         if hyde_text:
-            raw_embs = await asyncio.to_thread(
-                bi_encoder.encode, [question, hyde_text], show_progress_bar=False
-            )
+            raw_embs = await asyncio.to_thread(bi_encoder.encode, [question, hyde_text], show_progress_bar=False)
             q_embedding = ((raw_embs[0] + raw_embs[1]) / 2).tolist()
         else:
             q_embedding = (await asyncio.to_thread(bi_encoder.encode, [question], show_progress_bar=False))[0].tolist()
@@ -100,7 +96,7 @@ async def _recall_and_rerank(question: str, url: str, top_k_recall: int = 20, to
     vector_results = collection.query(
         query_embeddings=[q_embedding],
         n_results=min(top_k_recall, collection.count()),
-        include=["documents", "embeddings"]
+        include=["documents", "embeddings"],
     )
     vector_chunks = vector_results["documents"][0]  # ordered by vector similarity
     vector_embeddings = vector_results["embeddings"][0]
@@ -139,38 +135,35 @@ async def _recall_and_rerank(question: str, url: str, top_k_recall: int = 20, to
     # Build a merged list of unique chunks, sorted by RRF score desc
     # Map key back to full chunk text
     all_source_chunks = vector_chunks + [c for c in bm25_chunks if c[:100] not in {v[:100] for v in vector_chunks}]
-    
-    scored_chunks = sorted(
-        all_source_chunks,
-        key=lambda c: rrf_scores.get(c[:100], 0),
-        reverse=True
-    )
-    
+
+    scored_chunks = sorted(all_source_chunks, key=lambda c: rrf_scores.get(c[:100], 0), reverse=True)
+
     # Take top candidates for Cross-Encoder reranking
     candidate_chunks = scored_chunks[:top_k_recall]
-    
+
     # Build embedding lookup for personalization bonus
     # For vector-recalled chunks we already have embeddings;
     # for BM25-only chunks we encode on the fly
     vector_chunk_set = set(c[:100] for c in vector_chunks)
-    chunk_embeddings: dict[str, list] = {c[:100]: emb for c, emb in zip(vector_chunks, vector_embeddings)}
+    chunk_embeddings: dict[str, list] = {c[:100]: emb for c, emb in zip(vector_chunks, vector_embeddings, strict=False)}
     bm25_only = [c for c in candidate_chunks if c[:100] not in vector_chunk_set]
     if bm25_only:
         bm25_embs = await asyncio.to_thread(bi_encoder.encode, bm25_only, show_progress_bar=False)
-        for c, emb in zip(bm25_only, bm25_embs):
+        for c, emb in zip(bm25_only, bm25_embs, strict=False):
             chunk_embeddings[c[:100]] = emb.tolist()
 
     # --- Cross-Encoder Reranking ---
     cross_encoder = get_cross_encoder()
     pairs = [[question, chunk] for chunk in candidate_chunks]
     scores = await asyncio.to_thread(cross_encoder.predict, pairs)
-    
+
     # --- Personalization: positive bonus + negative penalty ---
     from app.services.learning_service import get_user_feedback_profiles
+
     positive_centroid, negative_centroid = await get_user_feedback_profiles()
-    
+
     final_scores = []
-    for i, (score, chunk) in enumerate(zip(scores, candidate_chunks)):
+    for _i, (score, chunk) in enumerate(zip(scores, candidate_chunks, strict=False)):
         bonus = 0.0
         penalty = 0.0
         if positive_centroid is not None or negative_centroid is not None:
@@ -189,16 +182,18 @@ async def _recall_and_rerank(question: str, url: str, top_k_recall: int = 20, to
 
         total_score = float(score) + bonus - penalty
         source = chunk_to_source.get(chunk[:100], "semantic")
-        
-        final_scores.append({
-            "chunk": chunk,
-            "cross_score": round(float(score), 2),
-            "bonus": round(bonus, 2),
-            "penalty": round(penalty, 2),
-            "total": round(total_score, 2),
-            "source": source   # "semantic" | "keyword" | "hybrid"
-        })
-    
+
+        final_scores.append(
+            {
+                "chunk": chunk,
+                "cross_score": round(float(score), 2),
+                "bonus": round(bonus, 2),
+                "penalty": round(penalty, 2),
+                "total": round(total_score, 2),
+                "source": source,  # "semantic" | "keyword" | "hybrid"
+            }
+        )
+
     # Sort by total blended score descending
     ranked = sorted(final_scores, key=lambda x: x["total"], reverse=True)
     return ranked[:top_k_final]
@@ -207,6 +202,7 @@ async def _recall_and_rerank(question: str, url: str, top_k_recall: int = 20, to
 # -------------------------------------------------------------------
 # Cross-Article Retrieval
 # -------------------------------------------------------------------
+
 
 async def _recall_and_rerank_cross_article(
     question: str,
@@ -232,14 +228,10 @@ async def _recall_and_rerank_cross_article(
     if settings.RAG_HYDE_ENABLED:
         hyde_text = await _hyde_rewrite(question)
         if hyde_text:
-            raw_embs = await asyncio.to_thread(
-                bi_encoder.encode, [question, hyde_text], show_progress_bar=False
-            )
+            raw_embs = await asyncio.to_thread(bi_encoder.encode, [question, hyde_text], show_progress_bar=False)
             q_embedding = ((raw_embs[0] + raw_embs[1]) / 2).tolist()
         else:
-            q_embedding = (await asyncio.to_thread(
-                bi_encoder.encode, [question], show_progress_bar=False
-            ))[0].tolist()
+            q_embedding = (await asyncio.to_thread(bi_encoder.encode, [question], show_progress_bar=False))[0].tolist()
     else:
         q_embedding = bi_encoder.encode(question).tolist()
 
@@ -248,7 +240,7 @@ async def _recall_and_rerank_cross_article(
     rrf_scores: dict[str, float] = {}
     chunk_to_source_url: dict[str, str] = {}
     chunk_to_retrieval: dict[str, str] = {}  # "semantic" | "keyword"
-    all_chunks_by_key: dict[str, str] = {}   # key -> full chunk text
+    all_chunks_by_key: dict[str, str] = {}  # key -> full chunk text
     chunk_embeddings: dict[str, list] = {}
 
     # Cap collections to avoid O(n) blowup
@@ -291,7 +283,7 @@ async def _recall_and_rerank_cross_article(
             docs = results["documents"][0]
             embs = results["embeddings"][0]
 
-            for rank, (doc, emb) in enumerate(zip(docs, embs)):
+            for rank, (doc, emb) in enumerate(zip(docs, embs, strict=False)):
                 key = doc[:100]
                 time_boost = collection_time_boost.get(url, 1.0)
                 rrf_scores[key] = rrf_scores.get(key, 0) + (1 / (k + rank + 1)) * time_boost
@@ -327,7 +319,7 @@ async def _recall_and_rerank_cross_article(
 
     # Sort by RRF score, take top candidates for Cross-Encoder
     sorted_keys = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
-    candidate_keys = sorted_keys[:top_k_final * 4]  # 4x over-recall before reranking
+    candidate_keys = sorted_keys[: top_k_final * 4]  # 4x over-recall before reranking
 
     candidate_chunks = [all_chunks_by_key[k] for k in candidate_keys]
 
@@ -336,7 +328,7 @@ async def _recall_and_rerank_cross_article(
     if missing:
         missing_texts = [all_chunks_by_key[k] for k in missing]
         missing_embs = await asyncio.to_thread(bi_encoder.encode, missing_texts, show_progress_bar=False)
-        for k, emb in zip(missing, missing_embs):
+        for k, emb in zip(missing, missing_embs, strict=False):
             chunk_embeddings[k] = emb.tolist()
 
     # --- Cross-Encoder Reranking ---
@@ -346,10 +338,11 @@ async def _recall_and_rerank_cross_article(
 
     # --- Personalization ---
     from app.services.learning_service import get_user_feedback_profiles
+
     positive_centroid, negative_centroid = await get_user_feedback_profiles()
 
     final_scores = []
-    for i, (score, chunk) in enumerate(zip(scores, candidate_chunks)):
+    for _i, (score, chunk) in enumerate(zip(scores, candidate_chunks, strict=False)):
         key = chunk[:100]
         bonus = 0.0
         penalty = 0.0
@@ -366,15 +359,17 @@ async def _recall_and_rerank_cross_article(
                     penalty = max(0, float(np.dot(negative_centroid, chunk_emb_np))) * 2.0
 
         total_score = float(score) + bonus - penalty
-        final_scores.append({
-            "chunk": chunk,
-            "cross_score": round(float(score), 2),
-            "bonus": round(bonus, 2),
-            "penalty": round(penalty, 2),
-            "total": round(total_score, 2),
-            "source": chunk_to_retrieval.get(key, "semantic"),
-            "source_url": chunk_to_source_url.get(key, ""),
-        })
+        final_scores.append(
+            {
+                "chunk": chunk,
+                "cross_score": round(float(score), 2),
+                "bonus": round(bonus, 2),
+                "penalty": round(penalty, 2),
+                "total": round(total_score, 2),
+                "source": chunk_to_retrieval.get(key, "semantic"),
+                "source_url": chunk_to_source_url.get(key, ""),
+            }
+        )
 
     ranked = sorted(final_scores, key=lambda x: x["total"], reverse=True)
     return ranked[:top_k_final]
@@ -384,11 +379,11 @@ async def _recall_and_rerank_cross_article(
 # Prompt builders
 # -------------------------------------------------------------------
 
+
 def _build_cross_article_prompt(question: str, context_chunks: list[dict]) -> str:
     """Build RAG prompt for cross-article queries with source URLs."""
     numbered = "\n\n".join(
-        f"[{i + 1}] (来源: {c['source_url'][:60]}) {c['chunk']}"
-        for i, c in enumerate(context_chunks)
+        f"[{i + 1}] (来源: {c['source_url'][:60]}) {c['chunk']}" for i, c in enumerate(context_chunks)
     )
     return f"""你是一个专业的新闻深度分析助手。以下是从多篇文章中检索到的最相关段落（已编号），请基于这些内容回答用户的问题。
 在回答中，当你引用了某段内容时，请在相应语句末尾用方括号标注来源编号，例如 [1]、[2]。
@@ -403,10 +398,10 @@ def _build_cross_article_prompt(question: str, context_chunks: list[dict]) -> st
 请用简洁流畅的中文回答（记得标注引用编号）："""
 
 
-def _build_rag_prompt(question: str, context_chunks: list[str], history: list[dict] | None = None, memory_context: str = "") -> str:
-    numbered = "\n\n".join(
-        f"[{i + 1}] {chunk}" for i, chunk in enumerate(context_chunks)
-    )
+def _build_rag_prompt(
+    question: str, context_chunks: list[str], history: list[dict] | None = None, memory_context: str = ""
+) -> str:
+    numbered = "\n\n".join(f"[{i + 1}] {chunk}" for i, chunk in enumerate(context_chunks))
 
     history_section = ""
     if history:
@@ -438,6 +433,7 @@ def _build_rag_prompt(question: str, context_chunks: list[str], history: list[di
 # -------------------------------------------------------------------
 # Streaming query endpoints
 # -------------------------------------------------------------------
+
 
 async def query_cross_article(
     question: str,
@@ -494,7 +490,9 @@ async def query_cross_article(
     }
     yield f"[METADATA]{json.dumps(metadata)}[/METADATA]"
 
-    prompt = _build_cross_article_prompt(question, [{"chunk": r["chunk"], "source_url": r.get("source_url", "")} for r in ranked_results])
+    prompt = _build_cross_article_prompt(
+        question, [{"chunk": r["chunk"], "source_url": r.get("source_url", "")} for r in ranked_results]
+    )
 
     from app.services.llm_service import llm_service
     from app.services.metrics_service import metrics_service
@@ -527,16 +525,13 @@ async def query_stream(question: str, url: str, history: list[dict] | None = Non
     duplicated in context).  If *history* is provided by the caller,
     it is used directly — this avoids an extra DB round-trip.
     """
-    from app.services.chat_history_service import save_chat_message, get_chat_history
+    from app.services.chat_history_service import get_chat_history, save_chat_message
 
     # Load history BEFORE saving the current question
     if history is None:
         try:
             db_history = await get_chat_history(url)
-            history = [
-                {"role": "user" if m.role == "user" else "ai", "content": m.content}
-                for m in db_history[-6:]
-            ]
+            history = [{"role": "user" if m.role == "user" else "ai", "content": m.content} for m in db_history[-6:]]
         except Exception:
             history = []
 
@@ -545,14 +540,14 @@ async def query_stream(question: str, url: str, history: list[dict] | None = Non
 
     # Two-stage retrieval + Personalization
     ranked_results = await _recall_and_rerank(question, url)
-    
+
     if not ranked_results:
         yield "抱歉，暂时无法检索到相关内容，请确认文章已成功加载。"
         return
-    
+
     # Extract just the chunks for the prompt
     top_chunks = [r["chunk"] for r in ranked_results]
-    
+
     # Build citations list (1-indexed, matching prompt numbering)
     citations = [
         {
@@ -574,17 +569,19 @@ async def query_stream(question: str, url: str, history: list[dict] | None = Non
                 "total": r["total"],
                 "source": r.get("source", "semantic"),
                 # Show first 40 chars of chunk as a preview
-                "preview": r["chunk"][:40] + "..."
-            } for r in ranked_results
+                "preview": r["chunk"][:40] + "...",
+            }
+            for r in ranked_results
         ],
         "citations": citations,
     }
     yield f"[METADATA]{json.dumps(metadata)}[/METADATA]"
-    
+
     # Load user memory context for personalized responses
     memory_context = ""
     try:
         from app.services.memory_service import build_memory_context
+
         memory_context = await build_memory_context()
     except Exception:
         pass  # non-critical; proceed without memory
@@ -603,12 +600,9 @@ async def query_stream(question: str, url: str, history: list[dict] | None = Non
     full_response = ""
     async for chunk in stream:
         if chunk.usage:
-            await metrics_service.record_tokens(
-                chunk.usage.prompt_tokens, 
-                chunk.usage.completion_tokens
-            )
+            await metrics_service.record_tokens(chunk.usage.prompt_tokens, chunk.usage.completion_tokens)
             continue
-            
+
         if chunk.choices and chunk.choices[0].delta.content:
             delta = chunk.choices[0].delta.content
             full_response += delta

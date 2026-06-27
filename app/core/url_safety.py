@@ -1,8 +1,9 @@
 import asyncio
 import ipaddress
 import socket
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
+import httpx
 from pydantic import AnyHttpUrl
 
 BLOCKED_HOSTS = {"localhost"}
@@ -13,27 +14,20 @@ def _get_host(value: AnyHttpUrl | str) -> str:
         host = getattr(value, "host", None)
     else:
         host = urlsplit(str(value)).hostname
-    return (host or "").lower()
+    return (host or "").lower().rstrip(".")
 
 
 def _is_disallowed_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    # 198.18.0.0/15 is reserved for benchmarking, but widely used by local 
-    # transparent proxies (e.g. Clash 'Fake IP'). We allow it here to ensure 
+    # 198.18.0.0/15 is reserved for benchmarking, but widely used by local
+    # transparent proxies (e.g. Clash 'Fake IP'). We allow it here to ensure
     # connectivity in these environments while still blocking true private ranges.
     if isinstance(ip, ipaddress.IPv4Address):
         # Check if IP is in 198.18.0.0/15
         octets = ip.packed
-        if octets[0] == 198 and (octets[1] & 0xfe) == 18:
+        if octets[0] == 198 and (octets[1] & 0xFE) == 18:
             return False
 
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    )
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
 
 
 def validate_public_url(value: AnyHttpUrl | str) -> AnyHttpUrl | str:
@@ -100,3 +94,26 @@ async def ensure_public_url_target(url: str) -> str:
             raise ValueError(f"The resolved IP '{ip}' for host '{host}' is a private network address.")
 
     return url
+
+
+async def get_public_url(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    timeout: float,
+    max_redirects: int = 5,
+) -> httpx.Response:
+    """GET a public URL while re-validating every redirect target."""
+    current_url = await ensure_public_url_target(url)
+
+    for _ in range(max_redirects + 1):
+        response = await client.get(current_url, timeout=timeout, follow_redirects=False)
+        if not response.is_redirect:
+            return response
+
+        location = response.headers.get("location")
+        if not location:
+            raise ValueError("Redirect target is missing.")
+        current_url = await ensure_public_url_target(urljoin(str(response.url), location))
+
+    raise ValueError("Too many redirects while fetching URL.")

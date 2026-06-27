@@ -1,7 +1,7 @@
 """add_source_promptconfig_modelapiconfig_taskrun
 
 Revision ID: ba368bbde8b5
-Revises:
+Revises: 0001_initial_core_schema
 Create Date: 2026-05-23 14:01:19.267077
 
 """
@@ -14,7 +14,7 @@ import sqlmodel.sql.sqltypes  # noqa: F401 — needed for AutoString columns
 
 # revision identifiers, used by Alembic.
 revision: str = 'ba368bbde8b5'
-down_revision: Union[str, None] = None
+down_revision: Union[str, None] = '0001_initial_core_schema'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

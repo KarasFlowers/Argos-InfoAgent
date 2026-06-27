@@ -2,9 +2,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.api.router import _collect_catchup_news
 from app.models.schemas import DailySummaryResponse, SummaryItem
+from app.services.catchup_service import collect_catchup_news
 from app.services.llm.catchup import CatchupMixin
+from app.services.llm_service import llm_service
 
 
 def _item(headline: str, url: str, source: str = "example") -> SummaryItem:
@@ -33,24 +34,27 @@ async def test_collect_catchup_news_excludes_articles_already_in_today():
 
     with (
         patch(
-            "app.api.router.db_service.get_unread_summary_items",
-            new=AsyncMock(return_value=[
-                ("2026-06-08", _item("Today duplicate", "https://example.com/today")),
-                ("2026-06-07", earlier),
-                ("2026-06-07", unread),
-            ]),
+            "app.services.catchup_service.db_service.get_unread_summary_items",
+            new=AsyncMock(
+                return_value=[
+                    ("2026-06-08", _item("Today duplicate", "https://example.com/today")),
+                    ("2026-06-07", earlier),
+                    ("2026-06-07", unread),
+                ]
+            ),
         ),
         patch(
-            "app.api.router.llm_service.select_important_catchup_indices",
+            "app.services.llm_service.llm_service.select_important_catchup_indices",
             new=AsyncMock(side_effect=lambda items: set(range(len(items)))),
         ),
     ):
-        result = await _collect_catchup_news(
+        result = await collect_catchup_news(
             session=object(),
             board_id=1,
             catchup_days=7,
             today_str="2026-06-08",
             exclude_items=today_items,
+            importance_selector=llm_service.select_important_catchup_indices,
         )
 
     assert [item.headline for item in result] == ["Still unread"]
@@ -66,23 +70,26 @@ async def test_collect_catchup_news_deduplicates_history_items_by_normalized_url
 
     with (
         patch(
-            "app.api.router.db_service.get_unread_summary_items",
-            new=AsyncMock(return_value=[
-                ("2026-06-06", old_variant),
-                ("2026-06-07", new_variant),
-                ("2026-06-07", unique),
-            ]),
+            "app.services.catchup_service.db_service.get_unread_summary_items",
+            new=AsyncMock(
+                return_value=[
+                    ("2026-06-06", old_variant),
+                    ("2026-06-07", new_variant),
+                    ("2026-06-07", unique),
+                ]
+            ),
         ),
         patch(
-            "app.api.router.llm_service.select_important_catchup_indices",
+            "app.services.llm_service.llm_service.select_important_catchup_indices",
             new=AsyncMock(side_effect=lambda items: set(range(len(items)))),
         ),
     ):
-        result = await _collect_catchup_news(
+        result = await collect_catchup_news(
             session=object(),
             board_id=1,
             catchup_days=7,
             today_str="2026-06-08",
+            importance_selector=llm_service.select_important_catchup_indices,
         )
 
     assert [item.headline for item in result] == [
@@ -102,23 +109,26 @@ async def test_collect_catchup_news_deduplicates_by_cluster_id():
 
     with (
         patch(
-            "app.api.router.db_service.get_unread_summary_items",
-            new=AsyncMock(return_value=[
-                ("2026-06-07", clustered),
-                ("2026-06-07", unique),
-            ]),
+            "app.services.catchup_service.db_service.get_unread_summary_items",
+            new=AsyncMock(
+                return_value=[
+                    ("2026-06-07", clustered),
+                    ("2026-06-07", unique),
+                ]
+            ),
         ),
         patch(
-            "app.api.router.llm_service.select_important_catchup_indices",
+            "app.services.llm_service.llm_service.select_important_catchup_indices",
             new=AsyncMock(side_effect=lambda items: set(range(len(items)))),
         ),
     ):
-        result = await _collect_catchup_news(
+        result = await collect_catchup_news(
             session=object(),
             board_id=1,
             catchup_days=7,
             today_str="2026-06-08",
             exclude_items=today_items,
+            importance_selector=llm_service.select_important_catchup_indices,
         )
 
     assert [item.headline for item in result] == ["Different event"]
@@ -172,6 +182,4 @@ async def test_score_catchup_items_uses_item_position_not_headline():
     filtered = await mixin._score_catchup_items(summaries)
 
     assert len(filtered) == 1
-    assert [item["original_link"] for item in filtered[0]["top_news"]] == [
-        "https://example.com/a"
-    ]
+    assert [item["original_link"] for item in filtered[0]["top_news"]] == ["https://example.com/a"]

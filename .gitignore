@@ -87,6 +87,7 @@ logs/*.log
 *.log
 .codex-ui-server.*.log
 .tmp/
+backups/
 
 # Redis persistence
 dump.rdb
@@ -95,9 +96,6 @@ dump.rdb
 # Local tools
 tools/redis/
 tools/*.zip
-
-# Documentation
-docs/
 
 # Reference project
 reference/

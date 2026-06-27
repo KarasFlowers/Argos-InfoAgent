@@ -28,11 +28,9 @@ async def get_persona_training_summary(
     pref_counts = {key: len(value or []) for key, value in pref_groups.items()}
 
     feedback_rows = list(
-        (
-            await session.execute(
-                select(UserFeedback).order_by(desc(UserFeedback.created_at), desc(UserFeedback.id))
-            )
-        ).scalars().all()
+        (await session.execute(select(UserFeedback).order_by(desc(UserFeedback.created_at), desc(UserFeedback.id))))
+        .scalars()
+        .all()
     )
 
     article_info: dict[str, dict] = {}
@@ -90,12 +88,8 @@ async def get_persona_training_summary(
     liked_items = [item for item in feedback_items if item["sentiment"] == 1]
     disliked_items = [item for item in feedback_items if item["sentiment"] == -1]
 
-    top_categories = Counter(
-        item["category"] for item in liked_items if item.get("category")
-    ).most_common(limit)
-    top_sources = Counter(
-        item["source"] for item in liked_items if item.get("source")
-    ).most_common(limit)
+    top_categories = Counter(item["category"] for item in liked_items if item.get("category")).most_common(limit)
+    top_sources = Counter(item["source"] for item in liked_items if item.get("source")).most_common(limit)
 
     return {
         "board": board_slug or "default",

@@ -4,27 +4,26 @@ from sqlalchemy import pool
 from sqlmodel import SQLModel
 
 from alembic import context
+from app.core.config import settings
 
 # Import all models so SQLModel.metadata picks them up for autogenerate
 from app.models.domain import (  # noqa: F401
-    Board,
-    DailySummary,
-    NewsItem,
-    UserFeedback,
-    ChatMessage,
-    UserPersona,
-    UserMemory,
     ArticleOverview,
-    Source,
-    ModelApiConfig,
-    TaskRun,
-    ContentCluster,
     BlacklistKeyword,
-    FilteredItem,
+    Board,
+    ChatMessage,
+    ContentCluster,
     DailyReportRefinementSession,
+    DailySummary,
+    FilteredItem,
+    ModelApiConfig,
+    NewsItem,
+    Source,
+    TaskRun,
+    UserFeedback,
+    UserMemory,
+    UserPersona,
 )
-
-from app.core.config import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -62,9 +61,7 @@ def run_migrations_online() -> None:
     connectable = create_engine(url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
