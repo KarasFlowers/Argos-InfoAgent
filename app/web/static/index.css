@@ -317,7 +317,7 @@ h1, h2, h3 {
     box-shadow: var(--shadow-soft);
     padding: 0.4rem;
     z-index: 1000;
-    min-width: 140px;
+    min-width: 168px;
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
@@ -346,6 +346,8 @@ h1, h2, h3 {
     border-radius: 8px;
     white-space: nowrap;
     transition: background 0.2s;
+    width: 100%;
+    text-align: left;
 }
 
 .more-menu-item:hover {
@@ -658,6 +660,88 @@ html.light-mode .more-menu {
     margin-bottom: 0;
 }
 
+.recommendation-reason {
+    margin: 1rem 0 1.2rem;
+    padding: 0.85rem 0.95rem;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.recommendation-reason__title {
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 0.35rem;
+}
+
+.recommendation-reason__text {
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.55;
+    margin: 0;
+}
+
+.preference-match-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.65rem;
+}
+
+.preference-match-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.18rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.16);
+}
+
+.assistant-question-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.3rem 0 1.3rem;
+}
+
+.assistant-question-row__label {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
+.assistant-question-chip,
+.rag-suggestion-chip {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 0.32rem 0.68rem;
+    font-size: 0.76rem;
+    line-height: 1.25;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    max-width: 100%;
+}
+
+.assistant-question-chip:hover,
+.rag-suggestion-chip:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+}
+
+.assistant-question-chip:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+}
+
 .tags-container {
     display: flex;
     flex-wrap: wrap;
@@ -883,6 +967,10 @@ html.light-mode .more-menu {
 
 .feedback-inline-message.is-info {
     color: #93c5fd;
+}
+
+.feedback-inline-message.is-success {
+    color: #6ee7b7;
 }
 
 .card-actions {
@@ -1497,6 +1585,36 @@ html.light-mode .entity-search-bar input {
 .persona-training-feedback__meta {
     font-size: 0.72rem;
     color: var(--text-secondary);
+}
+
+.preference-impact-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.preference-impact-empty {
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+    line-height: 1.5;
+    margin: 0;
+}
+
+.preference-impact-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.62rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.preference-impact-chip strong {
+    color: var(--text-primary);
+    font-size: 0.72rem;
 }
 
 .persona-feedback {
@@ -5326,8 +5444,10 @@ html.light-mode .weekly-insight-content blockquote {
 
 .citation-sources {
     margin-top: 1rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.025);
 }
 
 .citation-heading {
@@ -5335,6 +5455,29 @@ html.light-mode .weekly-insight-content blockquote {
     font-weight: 700;
     color: var(--text-secondary);
     margin-bottom: 0.5rem;
+}
+
+.rag-suggestions {
+    text-align: left;
+}
+
+.rag-suggestions__label {
+    font-size: 0.78rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}
+
+.rag-suggestions__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.rag-suggestion-chip.is-active {
+    color: #93c5fd;
+    border-color: rgba(59, 130, 246, 0.28);
+    background: rgba(59, 130, 246, 0.12);
 }
 
 .history-hint {
@@ -5590,6 +5733,24 @@ html.light-mode .coverage-modal-card.is-focused {
 html.light-mode .source-feed-item:hover {
     background: rgba(0, 0, 0, 0.045);
     border-color: rgba(0, 0, 0, 0.12);
+}
+html.light-mode .recommendation-reason {
+    background: rgba(0, 0, 0, 0.025);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+html.light-mode .assistant-question-chip,
+html.light-mode .rag-suggestion-chip {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+html.light-mode .assistant-question-chip:hover,
+html.light-mode .rag-suggestion-chip:hover {
+    background: rgba(0, 0, 0, 0.07);
+}
+html.light-mode .preference-match-chip {
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.14);
+    color: #2563eb;
 }
 html.light-mode .source-feed-select {
     background: rgba(255, 255, 255, 0.95);

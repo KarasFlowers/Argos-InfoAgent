@@ -56,6 +56,9 @@ class SummaryItem(BaseModel):
     cluster_id: int | None = None
     is_catchup: bool = False
     original_date: str | None = None  # YYYY-MM-DD of the original summary when is_catchup=True
+    recommendation_reason: str = ""
+    preference_matches: list[str] = Field(default_factory=list)
+    assistant_questions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

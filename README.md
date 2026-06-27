@@ -6,35 +6,35 @@
 
 **[English](README.md) | [Chinese](README_zh.md)**
 
-> An intelligent daily tech briefing assistant powered by LLM and RAG — with multi-board management, article-level RAG Q&A, deep research, and MCP integration.
+> Understand the tech trends you care about in 10 minutes a day — AI daily briefings plus a reading assistant.
 
-Argos is a FastAPI-based daily tech briefing application that aggregates content from multiple sources (RSS, Hacker News, Reddit, GitHub, or pure LLM), uses any OpenAI-compatible LLM to curate structured summaries, and provides article-level RAG chat with feedback-driven personalization. Each board runs independently with its own sources, prompts, persona, and notification channels.
+Argos is a FastAPI-based daily tech briefing and reading assistant. It aggregates content from multiple sources (RSS, Hacker News, Reddit, GitHub, or pure LLM), uses any OpenAI-compatible LLM to curate structured summaries, and helps you move from “seeing updates” to “understanding what matters” with recommendation explanations, article-level RAG chat, and feedback-driven personalization. Each board runs independently with its own sources, prompts, persona, and notification channels.
 
 ## ✨ Highlight Features
+
+### 📰 Daily Briefing Flow
+
+Designed around the core loop: read today’s briefing, understand an article, ask follow-up questions, save or give feedback, and let the system learn your preferences. Each story explains why it was recommended and suggests useful follow-up questions.
+
+### 🔍 Reading Assistant
+
+Article-level RAG chat with cited evidence, fast overviews, and suggested follow-up questions. The retrieval pipeline combines Bi-Encoder + BM25 with **Cross-Encoder reranking** and **HyDE query rewriting**.
+
+### 🎯 Personalized Recommendations
+
+Explicit like/dislike feedback + focus/block topics + source preferences + **user memory** (persistent preferences and context). The more you use it, the better it knows you, while still showing why stories were recommended.
 
 ### 🧩 Board System
 
 Create custom sections (boards) — each with its own source type, system prompt, persona, schedule, and notification channels. The AI-guided **Board Wizard** helps you configure new boards in seconds.
 
-### 🔍 Article-Level RAG
-
-Hybrid retrieval pipeline combining Bi-Encoder + BM25 with **Cross-Encoder reranking** and **HyDE query rewriting**. Supports both single-article and **cross-article** Q&A over all ingested content.
-
-### 🔬 Deep Research
-
-Decompose a complex question into sub-queries, search RAG + web sources, then synthesize a structured research report — all in one click.
-
-### 🤖 MCP Server
-
-Expose all capabilities to AI assistants (Claude, Cursor, Windsurf, etc.) via the [Model Context Protocol](https://modelcontextprotocol.io/) — 14 tools for briefings, RAG, research, and preferences.
-
-### 🎯 Personalized Recommendations
-
-Explicit like/dislike feedback + auto-extracted interests + **user memory system** (persistent preferences and context). The more you use it, the better it knows you.
-
 ### 📢 Email Notifications
 
 Push daily briefings via **SMTP email** — automatically on schedule or on demand. External notifications are disabled by default.
+
+### 🔬 Advanced Tools
+
+Deep research, cross-article RAG, MCP Server, source health monitoring, and cost metrics remain available as advanced tools for deeper analysis and self-hosted operations.
 
 ---
 

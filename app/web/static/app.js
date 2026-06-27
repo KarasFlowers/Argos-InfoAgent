@@ -2891,7 +2891,11 @@ function updateFeedbackStateInData(url, sentiment) {
     if (!latestData || !Array.isArray(latestData.top_news)) return;
     const storedSentiment = sentiment === 1 || sentiment === -1 ? sentiment : null;
 
-    for (const item of latestData.top_news) {
+    const allItems = [
+        ...(latestData.top_news || []),
+        ...(latestData.catchup_news || []),
+    ];
+    for (const item of allItems) {
         if (item.original_link === url) {
             item.feedback_sentiment = storedSentiment;
         }
@@ -2983,7 +2987,7 @@ function createNewsCard(newsItem, index) {
     if (typeof newsItem.persona_score === 'number' && newsItem.persona_score > 0.5) {
         const recBadge = document.createElement('span');
         recBadge.className = 'persona-rec-badge';
-        recBadge.textContent = '🎯 为你推荐';
+        recBadge.textContent = '为你推荐';
         meta.appendChild(recBadge);
     }
 
@@ -3003,6 +3007,37 @@ function createNewsCard(newsItem, index) {
         pointsList.appendChild(item);
     }
     body.appendChild(pointsList);
+
+    const reason = String(newsItem.recommendation_reason || '').trim();
+    const matches = Array.isArray(newsItem.preference_matches) ? newsItem.preference_matches.filter(Boolean) : [];
+    if (reason || matches.length > 0) {
+        const reasonBlock = document.createElement('div');
+        reasonBlock.className = 'recommendation-reason';
+
+        const reasonTitle = document.createElement('div');
+        reasonTitle.className = 'recommendation-reason__title';
+        reasonTitle.textContent = '为什么推荐';
+        reasonBlock.appendChild(reasonTitle);
+
+        const reasonText = document.createElement('p');
+        reasonText.className = 'recommendation-reason__text';
+        reasonText.textContent = reason || '今日简报筛选出的重点资讯';
+        reasonBlock.appendChild(reasonText);
+
+        if (matches.length > 0) {
+            const matchRow = document.createElement('div');
+            matchRow.className = 'preference-match-row';
+            matches.slice(0, 4).forEach((match) => {
+                const chip = document.createElement('span');
+                chip.className = 'preference-match-chip';
+                chip.textContent = match;
+                matchRow.appendChild(chip);
+            });
+            reasonBlock.appendChild(matchRow);
+        }
+
+        body.appendChild(reasonBlock);
+    }
 
     if (Array.isArray(newsItem.tags) && newsItem.tags.length > 0) {
         const tagsContainer = document.createElement('div');
@@ -3087,9 +3122,38 @@ function createNewsCard(newsItem, index) {
     askButton.type = 'button';
     askButton.className = 'ask-btn';
     askButton.disabled = !safeLink;
-    askButton.addEventListener('click', () => openRagPanel(newsItem.original_link, newsItem.headline || '未命名资讯'));
+    askButton.addEventListener('click', () => openRagPanel(
+        newsItem.original_link,
+        newsItem.headline || '未命名资讯',
+        newsItem
+    ));
     appendStaticIcon(askButton, ICONS.ask);
     askButton.appendChild(document.createTextNode('深度追问'));
+
+    const questions = Array.isArray(newsItem.assistant_questions) ? newsItem.assistant_questions.filter(Boolean) : [];
+    if (questions.length > 0) {
+        const questionRow = document.createElement('div');
+        questionRow.className = 'assistant-question-row';
+        const questionLabel = document.createElement('span');
+        questionLabel.className = 'assistant-question-row__label';
+        questionLabel.textContent = '可追问';
+        questionRow.appendChild(questionLabel);
+        questions.slice(0, 2).forEach((question) => {
+            const questionBtn = document.createElement('button');
+            questionBtn.type = 'button';
+            questionBtn.className = 'assistant-question-chip';
+            questionBtn.disabled = !safeLink;
+            questionBtn.textContent = question;
+            questionBtn.addEventListener('click', () => openRagPanel(
+                newsItem.original_link,
+                newsItem.headline || '未命名资讯',
+                newsItem,
+                question
+            ));
+            questionRow.appendChild(questionBtn);
+        });
+        body.appendChild(questionRow);
+    }
 
     actions.appendChild(feedbackContainer);
     actions.appendChild(askButton);
@@ -3537,6 +3601,14 @@ async function sendFeedback(buttonElement, url, sentiment, newsItem) {
         updateFeedbackStateInData(url, nextSentiment);
         clearFeedbackInlineMessage(buttonElement);
 
+        if (nextSentiment === 1) {
+            showFeedbackInlineMessage(buttonElement, '已用于调整你的偏好', 'success');
+        } else if (nextSentiment === -1) {
+            showFeedbackInlineMessage(buttonElement, '已减少类似内容推荐', 'info');
+        } else {
+            showFeedbackInlineMessage(buttonElement, '已移除反馈', 'info');
+        }
+
         // On a fresh positive like, offer the user a chance to declare WHY
         // (capturing abstract intent rather than literal subject).
         if (nextSentiment === 1 && currentSentiment !== 1 && newsItem) {
@@ -3633,7 +3705,7 @@ function showFeedbackInlineMessage(buttonElement, message, type = 'error') {
     if (!container) return;
     clearFeedbackInlineMessage(buttonElement);
     const messageEl = document.createElement('span');
-    messageEl.className = `feedback-inline-message is-${safeClassToken(type, 'error', ['error', 'info'])}`;
+    messageEl.className = `feedback-inline-message is-${safeClassToken(type, 'error', ['error', 'info', 'success'])}`;
     messageEl.textContent = message;
     messageEl.setAttribute('role', type === 'error' ? 'alert' : 'status');
     messageEl.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
@@ -3855,12 +3927,12 @@ async function showInterestReasonPopup(anchorButton, newsItem) {
     popup.className = 'interest-popup';
     popup.innerHTML = `
         <div class="interest-popup__header">
-            <span class="interest-popup__title">🎯 你为什么感兴趣？</span>
+            <span class="interest-popup__title">你为什么感兴趣？</span>
             <button type="button" class="interest-popup__close" aria-label="关闭">×</button>
         </div>
         <p class="interest-popup__hint">选一项，添加为长期偏好。会影响后续生成的简报。</p>
         <div class="interest-popup__options">
-            <div class="interest-popup__loading">AI 正在为你提炼选项...</div>
+            <div class="interest-popup__loading">正在提炼可保存的偏好...</div>
         </div>
     `;
     card.appendChild(popup);
@@ -3924,7 +3996,7 @@ async function showInterestReasonPopup(anchorButton, newsItem) {
                 clearTimeout(dismissTimer);
                 popup.classList.add('saved');
                 popup.querySelector('.interest-popup__options').innerHTML =
-                    `<div class="interest-popup__success"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> 已添加：<strong>${escapeHtml(opt)}</strong></div>`;
+                    `<div class="interest-popup__success"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.3rem; vertical-align: middle;"><polyline points="20 6 9 17 4 12"></polyline></svg> 已添加偏好：<strong>${escapeHtml(opt)}</strong></div>`;
                 setTimeout(() => popup.remove(), 1500);
             } catch (error) {
                 console.error('Failed to save interest reason:', error);
@@ -4291,7 +4363,7 @@ function setupRagPanel() {
     });
 }
 
-async function openRagPanel(url, headline) {
+async function openRagPanel(url, headline, newsItem = null, initialQuestion = '') {
     const panelUrl = url;
     currentUrl = panelUrl;
     isIngesting = true;
@@ -4303,6 +4375,12 @@ async function openRagPanel(url, headline) {
     document.getElementById('rag-article-title').textContent = headline;
     openRagOverlay('#rag-close-btn');
     input.disabled = true;
+    input.value = '';
+
+    const suggestedQuestions = Array.isArray(newsItem?.assistant_questions)
+        ? newsItem.assistant_questions.filter(Boolean)
+        : buildFallbackAssistantQuestions(newsItem || { headline });
+    renderRagQuestionSuggestions(suggestedQuestions, initialQuestion);
 
     try {
         const historyRes = await fetch(`/api/v1/rag/history?url=${encodeURIComponent(panelUrl)}`);
@@ -4422,6 +4500,7 @@ async function openRagPanel(url, headline) {
         input.disabled = false;
         input.focus();
         isIngesting = false;
+        await maybeRunInitialRagQuestion(panelUrl, initialQuestion);
     } else {
         const ingestMessage = appendMessage('system', '正在阅读原文并建立知识索引，请稍候...');
 
@@ -4457,6 +4536,8 @@ async function openRagPanel(url, headline) {
 
             input.disabled = false;
             input.focus();
+            isIngesting = false;
+            await maybeRunInitialRagQuestion(panelUrl, initialQuestion);
         } catch (error) {
             if (currentUrl === panelUrl) {
                 ingestMessage.textContent = error.message;
@@ -4469,6 +4550,63 @@ async function openRagPanel(url, headline) {
     }
 
     await overviewPromise;
+}
+
+function buildFallbackAssistantQuestions(newsItem = {}) {
+    const headline = newsItem.headline || '这条资讯';
+    const category = newsItem.category || '';
+    const topic = Array.isArray(newsItem.tags) && newsItem.tags.length ? newsItem.tags[0] : category;
+    return [
+        '这件事最值得关注的变化是什么？',
+        `${headline} 对开发者或产品有什么实际影响？`,
+        topic ? `放到 ${topic} 的近期趋势里看，意味着什么？` : '有哪些背景信息能帮助我更快理解它？',
+    ];
+}
+
+function renderRagQuestionSuggestions(questions, activeQuestion = '') {
+    const messages = document.getElementById('rag-messages');
+    if (!messages || !Array.isArray(questions) || questions.length === 0) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'rag-suggestions rag-msg rag-msg--system';
+    const label = document.createElement('div');
+    label.className = 'rag-suggestions__label';
+    label.textContent = '建议追问';
+    wrapper.appendChild(label);
+
+    const row = document.createElement('div');
+    row.className = 'rag-suggestions__row';
+    questions.slice(0, 3).forEach((question) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'rag-suggestion-chip';
+        button.textContent = question;
+        button.classList.toggle('is-active', question === activeQuestion);
+        button.addEventListener('click', async () => {
+            const input = document.getElementById('rag-input');
+            if (!input) return;
+            input.value = question;
+            if (!input.disabled && currentUrl && !isIngesting) {
+                input.value = '';
+                appendMessage('user', question);
+                await runRagQuery(question);
+            } else {
+                input.focus();
+            }
+        });
+        row.appendChild(button);
+    });
+    wrapper.appendChild(row);
+    messages.appendChild(wrapper);
+}
+
+async function maybeRunInitialRagQuestion(panelUrl, question) {
+    const trimmed = String(question || '').trim();
+    if (!trimmed || currentUrl !== panelUrl || isIngesting) return;
+    const input = document.getElementById('rag-input');
+    if (input) input.value = '';
+    appendMessage('user', trimmed);
+    await runRagQuery(trimmed);
 }
 
 function closeRagPanel() {
@@ -4618,7 +4756,7 @@ function renderCitations(message, citations) {
 
     const heading = document.createElement('div');
     heading.className = 'citation-heading';
-    heading.textContent = '📚 参考来源';
+    heading.textContent = '回答依据';
     wrapper.appendChild(heading);
 
     citations.forEach((cite) => {
@@ -4828,11 +4966,44 @@ async function loadExplicitPreferences() {
         for (const cat of ['focus_topic', 'block_topic', 'prefer_source', 'avoid_source']) {
             renderPrefTags(cat, data[cat] || []);
         }
+        renderPreferenceImpactSummary(data);
         _refreshAllSuggestions();
     } catch (e) {
         console.error('Failed to load preferences', e);
         setPersonaFeedback(`读取显式偏好失败：${e.message}`, 'error');
     }
+}
+
+function renderPreferenceImpactSummary(data) {
+    const container = document.getElementById('preference-impact-summary');
+    if (!container) return;
+
+    const groups = [
+        ['focus_topic', '关注话题'],
+        ['block_topic', '屏蔽话题'],
+        ['prefer_source', '优先来源'],
+        ['avoid_source', '降权来源'],
+    ];
+    const chips = [];
+    groups.forEach(([category, label]) => {
+        const items = Array.isArray(data?.[category]) ? data[category] : [];
+        items.slice(0, 4).forEach((item) => {
+            const content = String(item?.content || item || '').trim();
+            if (content) chips.push({ category, label, content });
+        });
+    });
+
+    if (chips.length === 0) {
+        container.innerHTML = '<p class="preference-impact-empty">还没有主动设置的推荐偏好。点赞、屏蔽话题或添加来源偏好后，这里会显示当前影响排序的信号。</p>';
+        return;
+    }
+
+    container.innerHTML = chips.slice(0, 12).map((chip) => `
+        <span class="preference-impact-chip is-${safeClassToken(chip.category, 'preference')}">
+            <strong>${escapeHtml(chip.label)}</strong>
+            ${escapeHtml(chip.content)}
+        </span>
+    `).join('');
 }
 
 function renderPrefTags(category, items) {

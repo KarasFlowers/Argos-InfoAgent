@@ -15,6 +15,7 @@ from app.services.catchup_service import board_catchup_days, collect_catchup_new
 from app.services.db_service import db_service
 from app.services.learning_service import rerank_summary_items
 from app.services.llm_service import llm_service
+from app.services.recommendation_explain import enrich_summary_explanations
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +260,7 @@ async def generate_summary(
                 )
             await _attach_event_tracks(session, existing_summary, board_id)
             await _attach_source_analysis(session, existing_summary, board_id)
+            await enrich_summary_explanations(existing_summary, session, board_id)
             return existing_summary
 
     if date and date != datetime.now().strftime("%Y-%m-%d"):
@@ -294,6 +296,7 @@ async def generate_summary(
                     )
                 await _attach_event_tracks(session, existing_summary, board_id)
                 await _attach_source_analysis(session, existing_summary, board_id)
+                await enrich_summary_explanations(existing_summary, session, board_id)
                 return existing_summary
 
         from app.services.source_adapters import UnknownSourceTypeError, get_adapter
@@ -381,6 +384,7 @@ async def generate_summary(
                         )
                     await _attach_event_tracks(session, existing_summary, board_id)
                     await _attach_source_analysis(session, existing_summary, board_id)
+                    await enrich_summary_explanations(existing_summary, session, board_id)
                     return existing_summary
                 raise HTTPException(status_code=500, detail="Failed to save AI summary.") from None
             except Exception as exc:
@@ -432,4 +436,5 @@ async def generate_summary(
             )
         await _attach_event_tracks(session, final, board_id)
         await _attach_source_analysis(session, final, board_id)
+        await enrich_summary_explanations(final, session, board_id)
         return final
