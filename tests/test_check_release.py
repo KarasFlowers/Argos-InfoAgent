@@ -21,6 +21,8 @@ def test_check_release_runs_default_gates_without_docker_smoke(monkeypatch):
         "Frontend syntax",
         "Frontend API key smoke",
         "Docker Compose config",
+        "Docker Compose RAG config",
+        "Docker Compose Redis config",
         "Tests",
         "Runtime smoke",
     ]

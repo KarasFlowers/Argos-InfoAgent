@@ -12,6 +12,7 @@ def test_unix_launcher_prompts_for_generic_llm_api_key():
     assert "sk-your-deepseek-api-key-here" not in script
     assert "Please edit it to add your LLM_API_KEY." in script
     assert "RAG_ENABLED_EFFECTIVE=false" in script
+    assert "true|1|yes|on)" in script
     assert "skipping RAG dependencies and embedding model download" in script
     assert '"$PIP" install -r requirements-rag.txt -q' in script
     assert '"$PYTHON" scripts/download_models.py' in script
@@ -23,6 +24,12 @@ def test_windows_launcher_bootstraps_first_run_environment():
     assert 'set "PYTHON_EXE=' in script
     assert '-m venv "%PROJECT_ROOT%\\venv"' in script
     assert '-m pip install -r "%PROJECT_ROOT%\\requirements.txt"' in script
+    assert "RAG_ENABLED_EFFECTIVE=false" in script
+    assert "resolve_rag_enabled.py" in script
+    assert "requirements-rag.txt" in script
+    assert "download_models.py" in script
+    assert "setup_redis.ps1" not in script
+    assert "Redis not found. Caching will be disabled." in script
     assert 'copy "%PROJECT_ROOT%\\.env.template" "%PROJECT_ROOT%\\.env"' in script
     assert "ARGOS_FIRST_RUN_LLM_API_KEY=LLM_API_KEY" in script
     assert '# LLM_API_KEY=\\"sk-your-api-key-here\\"' in script

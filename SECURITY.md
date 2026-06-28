@@ -8,7 +8,7 @@ Argos is designed for private single-user or small self-hosted deployments. It i
 - Set `API_KEY` before exposing Argos outside localhost or a private VPN.
 - Put Argos behind a reverse proxy that terminates TLS for internet-facing deployments.
 - Set `PUBLIC_BASE_URL` to the externally reachable origin when serving feeds behind a proxy.
-- Do not publish Redis to the internet. The default Docker Compose stack keeps Redis on the internal Docker network; use `REDIS_URL` for a separately managed, protected Redis instance.
+- Do not publish Redis to the internet. The optional `docker-compose.redis.yml` stack keeps Redis on the internal Docker network; use `REDIS_URL` for a separately managed, protected Redis instance.
 
 ## Authentication
 

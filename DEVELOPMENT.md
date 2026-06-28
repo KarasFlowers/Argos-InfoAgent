@@ -13,7 +13,7 @@ Local setup and common tasks for working on Argos.
 ```bash
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 pip install -r requirements-rag.txt   # only if RAG_ENABLED=true
 cp .env.template .env                 # then edit LLM_API_KEY
 ```
@@ -79,7 +79,7 @@ main.py              # FastAPI app entry point
 
 ## Environment toggles
 
-- `RAG_ENABLED` — set `false` to skip ~2GB model downloads and disable RAG Q&A.
+- `RAG_ENABLED` — defaults to `false`; set `true` to enable article-level RAG and local model downloads.
 - `API_KEY` — when set, private API routes require the `X-API-Key` header. `/`, `/favicon.ico`, `/static/*`, `/feed`, and `/api/v1/ping` stay public; `OPTIONS` stays open for CORS preflight.
 - `PUBLIC_BASE_URL` — public origin used in RSS/canonical links; set this when running behind a reverse proxy. It must be an absolute `http(s)` URL without query/fragment.
 - `CORS_ORIGINS` — comma-separated browser origins. Use origins only (`https://argos.example.com`), not paths. If set to `*`, credentialed CORS is disabled even when `CORS_ALLOW_CREDENTIALS=true`.
@@ -110,6 +110,8 @@ pytest
 node --check app/web/static/app.js
 node scripts/frontend_auth_smoke.js
 docker compose config --quiet
+docker compose -f docker-compose.yml -f docker-compose.rag.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.redis.yml config --quiet
 python scripts/runtime_smoke.py
 python scripts/docker_smoke.py
 python scripts/backup_data.py
@@ -121,7 +123,7 @@ python scripts/restore_data.py backups/<archive>.zip --force
 
 Use `/api/v1/ping` for public liveness checks. Use the private `/api/v1/status` endpoint for operator diagnostics; it reports database readiness and feature flags without returning provider keys, tokens, or passwords.
 
-`scripts/docker_smoke.py` runs `RAG_ENABLED=false API_KEY=argos-smoke-key docker compose up -d --build`, waits for `/api/v1/ping`, and verifies private endpoints reject missing/wrong `X-API-Key` values while accepting the correct key. It requires a running Docker daemon.
+`scripts/docker_smoke.py` runs the lightweight Compose stack with `RAG_ENABLED=false` and `API_KEY=argos-smoke-key`, waits for `/api/v1/ping`, and verifies private endpoints reject missing/wrong `X-API-Key` values while accepting the correct key. It requires a running Docker daemon.
 
 `scripts/backup_data.py` writes a zip archive under `backups/` using SQLite's backup API for `data/sqlite/argos.db` and includes `data/chroma/` by default. It never overwrites an existing archive with the same timestamp; a numeric suffix is added instead.
 

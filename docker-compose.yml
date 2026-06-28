@@ -1,39 +1,28 @@
 name: argos
 
 services:
-  redis:
-    image: redis:alpine
-    container_name: argos-redis
-    restart: always
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   app:
     build:
       context: .
       args:
-        RAG_ENABLED: ${RAG_ENABLED:-true}
+        RAG_ENABLED: ${RAG_ENABLED:-false}
+        PREWARM_RAG_MODELS: ${PREWARM_RAG_MODELS:-false}
+        MCP_ENABLED: ${MCP_ENABLED:-false}
     container_name: argos-app
     env_file:
       - path: .env
         required: false
-    depends_on:
-      redis:
-        condition: service_healthy
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
     environment:
-      - RAG_ENABLED=${RAG_ENABLED:-true}
-      - API_KEY=${API_KEY:-}
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:8000}
-      - REDIS_URL=redis://redis:6379
-      - SQLALCHEMY_DATABASE_URI=sqlite+aiosqlite:///./data/sqlite/argos.db
-      - CHROMA_DB_DIR=./data/chroma
+      RAG_ENABLED: ${RAG_ENABLED:-false}
+      API_KEY: ${API_KEY:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      REDIS_URL: ${REDIS_URL:-redis://localhost:6379}
+      SQLALCHEMY_DATABASE_URI: sqlite+aiosqlite:///./data/sqlite/argos.db
+      CHROMA_DB_DIR: ./data/chroma
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/ping')"]
       interval: 10s

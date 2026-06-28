@@ -82,16 +82,31 @@ async def test_summary_endpoint_responds(client):
 
 
 @pytest.mark.anyio
-async def test_rag_ingest_rejects_empty(client):
+async def test_rag_disabled_by_default_returns_503(client):
+    """RAG endpoints should be explicitly disabled in the lightweight default profile."""
+    response = await client.post(
+        "/api/v1/rag/query", json={"url": "https://example.com/never-ingested", "question": "test?"}
+    )
+
+    assert response.status_code == 503
+    assert "RAG feature is disabled" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_rag_ingest_rejects_empty(client, monkeypatch):
     """Ingest should reject an empty URL."""
+    monkeypatch.setattr("app.core.config.settings.RAG_ENABLED", True)
+
     response = await client.post("/api/v1/rag/ingest", json={"url": ""})
     # Should fail validation or return error
     assert response.status_code in (422, 500)
 
 
 @pytest.mark.anyio
-async def test_rag_query_requires_ingest(client):
+async def test_rag_query_requires_ingest(client, monkeypatch):
     """Query should fail if URL hasn't been ingested."""
+    monkeypatch.setattr("app.core.config.settings.RAG_ENABLED", True)
+
     response = await client.post(
         "/api/v1/rag/query", json={"url": "https://example.com/never-ingested", "question": "test?"}
     )
@@ -99,8 +114,10 @@ async def test_rag_query_requires_ingest(client):
 
 
 @pytest.mark.anyio
-async def test_rag_history_returns_empty(client):
+async def test_rag_history_returns_empty(client, monkeypatch):
     """History for an unknown URL should return empty list."""
+    monkeypatch.setattr("app.core.config.settings.RAG_ENABLED", True)
+
     response = await client.get("/api/v1/rag/history", params={"url": "https://example.com/no-history"})
     assert response.status_code == 200
     data = response.json()
@@ -109,16 +126,20 @@ async def test_rag_history_returns_empty(client):
 
 
 @pytest.mark.anyio
-async def test_feedback_rejects_invalid_sentiment(client):
+async def test_feedback_rejects_invalid_sentiment(client, monkeypatch):
     """Feedback should reject invalid sentiment values at the schema level."""
+    monkeypatch.setattr("app.core.config.settings.RAG_ENABLED", True)
+
     response = await client.post("/api/v1/rag/feedback", json={"url": "https://example.com", "sentiment": 5})
     # Pydantic's Literal[1, -1, 0] validation triggers a 422 Unprocessable Entity.
     assert response.status_code == 422
 
 
 @pytest.mark.anyio
-async def test_feedback_accepts_valid_like(client):
+async def test_feedback_accepts_valid_like(client, monkeypatch):
     """Feedback should accept a valid Like (+1)."""
+    monkeypatch.setattr("app.core.config.settings.RAG_ENABLED", True)
+
     response = await client.post(
         "/api/v1/rag/feedback", json={"url": "https://example.com/test-article", "sentiment": 1}
     )

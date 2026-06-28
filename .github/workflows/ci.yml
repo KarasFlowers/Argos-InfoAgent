@@ -31,7 +31,10 @@ jobs:
       - name: Git diff whitespace check
         run: git diff --check
       - name: Docker Compose config check
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.rag.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.redis.yml config --quiet
       - name: Docker smoke script help
         run: python scripts/docker_smoke.py --help
       - name: Runtime smoke script help
@@ -66,8 +69,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-rag.txt
+          pip install -r requirements-dev.txt
       - name: Run tests
         env:
           REDIS_URL: redis://localhost:6379/0

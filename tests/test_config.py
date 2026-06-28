@@ -108,6 +108,21 @@ class TestSettingsDefaults:
 
         assert settings.API_V1_STR.startswith("/api")
 
+    def test_core_requirements_include_numpy_for_runtime_learning(self):
+        assert "numpy>=1.26.0" in Path("requirements-core.txt").read_text(encoding="utf-8")
+
+    def test_rag_is_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("RAG_ENABLED", raising=False)
+
+        settings = Settings(_env_file=None)
+
+        assert settings.RAG_ENABLED is False
+
+    def test_rag_can_be_enabled_explicitly(self):
+        settings = Settings(RAG_ENABLED="true", _env_file=None)
+
+        assert settings.RAG_ENABLED is True
+
 
 class TestSettingsValidation:
     def test_public_base_url_must_be_absolute_http_url(self):

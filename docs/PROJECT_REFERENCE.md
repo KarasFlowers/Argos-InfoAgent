@@ -14,7 +14,7 @@ This document keeps the detailed reference material that used to live in the REA
 - **Source health monitoring**: track RSS/API source health status with error logging.
 - **Cross-source deduplication**: URL normalization plus AI semantic deduplication.
 - **URL safety validation**: block private/internal URLs to reduce SSRF risk.
-- **Local persistence**: SQLite, ChromaDB, and Redis cache for offline-first self-hosting.
+- **Local persistence**: SQLite by default, with optional ChromaDB and Redis cache for fuller offline self-hosting.
 
 ## Board Source Types
 
@@ -139,7 +139,7 @@ Runtime data lives under `data/`, `logs/`, and local cache directories. These ar
 - **LLM**: OpenAI-compatible APIs through a configurable `LLMClient`.
 - **RAG**: Sentence Transformers, ChromaDB, BM25, Cross-Encoder reranking, HyDE.
 - **MCP**: FastMCP and Model Context Protocol.
-- **Database/cache**: SQLite via aiosqlite and Redis.
+- **Database/cache**: SQLite via aiosqlite, optional Redis cache, and optional ChromaDB for RAG.
 - **Scraping**: httpx, feedparser, BeautifulSoup, trafilatura.
 - **Logging**: structlog.
 - **Templating**: Jinja2 for HTML and prompts.
@@ -227,7 +227,7 @@ Private endpoints use the `/api/v1` prefix unless noted. When `API_KEY` is set, 
 - Keep `PUBLIC_BASE_URL` aligned with the external URL when serving RSS/feed links behind a reverse proxy.
 - Back up `data/sqlite/argos.db` and `data/chroma/` together with `python scripts/backup_data.py`.
 - Before restoring, stop Argos and run `python scripts/restore_data.py backups/<archive>.zip --dry-run`; use `--force` only when replacing existing local data.
-- Set `RAG_ENABLED=false` for lightweight deployments that do not need article-level RAG or large embedding model downloads.
+- `RAG_ENABLED=false` is the default lightweight deployment. Set it to `true` only when article-level RAG and local embedding models are needed.
 - Scheduled external notifications are disabled by default. Set `NOTIFY_CHANNELS=email` and SMTP settings explicitly before enabling email push.
 - Track release-hardening evidence in [docs/INDUSTRIALIZATION_AUDIT.md](INDUSTRIALIZATION_AUDIT.md).
 

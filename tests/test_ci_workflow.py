@@ -19,7 +19,10 @@ def test_ci_lint_job_keeps_release_gate_checks():
     assert "ruff check ." in lint_runs
     assert "ruff format --check ." in lint_runs
     assert "git diff --check" in lint_runs
-    assert "docker compose config --quiet" in lint_runs
+    compose_check = "\n".join(lint_runs)
+    assert "docker compose config --quiet" in compose_check
+    assert "docker-compose.rag.yml" in compose_check
+    assert "docker-compose.redis.yml" in compose_check
     assert "node --check app/web/static/app.js" in lint_runs
     assert "node scripts/frontend_auth_smoke.js" in lint_runs
 
@@ -30,6 +33,7 @@ def test_ci_test_job_uses_project_pytest_defaults():
 
     assert "python -m pytest" in test_runs
     assert "python scripts/runtime_smoke.py --timeout 90" in test_runs
+    assert any("pip install -r requirements-dev.txt" in run for run in test_runs)
     assert "pytest tests/ -v" not in test_runs
 
 
