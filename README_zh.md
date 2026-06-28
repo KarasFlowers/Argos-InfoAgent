@@ -28,10 +28,10 @@ Web 仪表板运行在 `http://127.0.0.1:8000`。公开的 SEO 友好订阅页�
 ### 环境要求
 
 - Python 3.11+
-- Docker，或本地 Redis（非 Docker 运行时需要）
+- Docker，或用于本地启动的 Python
 - 任意 OpenAI 兼容 LLM API Key
 
-### Docker
+### Docker Lite
 
 ```bash
 git clone https://github.com/KarasFlowers/Argos.git
@@ -46,6 +46,19 @@ docker compose up -d
 ```
 
 打开 `http://127.0.0.1:8000`。
+
+默认 Compose 栈是轻量档：只启动 Web 应用，保持 `RAG_ENABLED=false`，不预下载 embedding 模型，也不强制依赖 Redis。
+
+### 部署档位
+
+| 档位 | 命令 | 启用能力 |
+|------|------|----------|
+| Lite | `docker compose up -d` | 每日简报、个性化、收藏和基础阅读流程。 |
+| Lite + Redis | `docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d` | Lite 加 Redis 缓存和指标。 |
+| Full RAG | `docker compose -f docker-compose.yml -f docker-compose.rag.yml up -d --build` | 文章级 RAG、ChromaDB、embedding/rerank 依赖和持久化模型缓存。 |
+| Full RAG + Redis | `docker compose -f docker-compose.yml -f docker-compose.rag.yml -f docker-compose.redis.yml up -d --build` | 完整本地阅读助手加 Redis 缓存。 |
+
+只有在使用 RAG 档且希望构建镜像时提前下载模型，才设置 `PREWARM_RAG_MODELS=true`。否则模型会在首次使用 RAG 时按需下载，并缓存到 `data/hf-cache`。
 
 可选检查：
 
@@ -65,7 +78,7 @@ chmod +x scripts/start.sh
 scripts\Open_Web_Dashboard.bat
 ```
 
-启动器会创建虚拟环境、安装依赖、引导创建 `.env`、检查 Redis、按需下载 RAG 模型、启动后端并打开仪表板。
+启动器会创建虚拟环境、安装轻量依赖、引导创建 `.env`、可选检查 Redis，并且只在 `RAG_ENABLED=true` 时安装/下载 RAG 依赖，然后启动后端并打开仪表板。
 
 ### 手动本地部署
 
@@ -84,6 +97,7 @@ cp .env.template .env
 
 # 仅在 RAG_ENABLED=true 时需要
 pip install -r requirements-rag.txt
+pip install -r requirements-mcp.txt  # 仅运行 mcp_server.py 时需要
 python scripts/download_models.py
 
 uvicorn main:app --reload
@@ -98,8 +112,8 @@ uvicorn main:app --reload
 | `LLM_MODEL` | 否 | 默认值为 `deepseek-chat`。 |
 | `API_KEY` | 否 | 设置后，私有 API 路由需要 `X-API-Key`。 |
 | `PUBLIC_BASE_URL` | 否 | 生成 RSS/canonical 链接时使用的公开访问地址。 |
-| `REDIS_URL` | 否 | 默认连接本地 Redis。 |
-| `RAG_ENABLED` | 否 | 轻量部署可设为 `false`，关闭文章级 RAG。 |
+| `REDIS_URL` | 否 | 可选 Redis 缓存地址。Docker Lite 不需要 Redis。 |
+| `RAG_ENABLED` | 否 | 默认 `false`；设为 `true` 后启用文章级 RAG。 |
 | `CORS_ORIGINS` | 否 | 逗号分隔的浏览器来源。只填写 origin；设置为 `*` 时会禁用 credentialed CORS。 |
 | `NOTIFY_CHANNELS` | 否 | 留空则禁用定时外部通知；SMTP 邮件使用 `email`。 |
 

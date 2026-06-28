@@ -101,11 +101,11 @@ if [ -z "$RAG_ENABLED_RAW" ] && [ -f "$PROJECT_ROOT/.env" ]; then
     RAG_ENABLED_RAW="$(grep -E '^[[:space:]]*RAG_ENABLED=' "$PROJECT_ROOT/.env" | tail -n 1 | cut -d= -f2- | tr -d "\"'[:space:]" || true)"
 fi
 case "${RAG_ENABLED_RAW,,}" in
-    false|0|no|off)
-        RAG_ENABLED_EFFECTIVE=false
+    true|1|yes|on)
+        RAG_ENABLED_EFFECTIVE=true
         ;;
     *)
-        RAG_ENABLED_EFFECTIVE=true
+        RAG_ENABLED_EFFECTIVE=false
         ;;
 esac
 

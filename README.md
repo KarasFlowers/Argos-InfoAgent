@@ -28,10 +28,10 @@ The web dashboard runs at `http://127.0.0.1:8000`. A public SEO-friendly feed pa
 ### Prerequisites
 
 - Python 3.11+
-- Docker, or local Redis when running without Docker
+- Docker, or Python for local startup
 - An OpenAI-compatible LLM API key
 
-### Docker
+### Docker Lite
 
 ```bash
 git clone https://github.com/KarasFlowers/Argos.git
@@ -46,6 +46,19 @@ docker compose up -d
 ```
 
 Open `http://127.0.0.1:8000`.
+
+The default Compose stack is lightweight: it starts only the web app, keeps `RAG_ENABLED=false`, does not pre-download embedding models, and does not require Redis.
+
+### Deployment Profiles
+
+| Profile | Command | What it enables |
+|---------|---------|-----------------|
+| Lite | `docker compose up -d` | Daily briefings, personalization, saved items, and basic reading flow. |
+| Lite + Redis | `docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d` | Lite plus Redis-backed cache and metrics. |
+| Full RAG | `docker compose -f docker-compose.yml -f docker-compose.rag.yml up -d --build` | Article-level RAG, ChromaDB, embedding/rerank dependencies, and persistent model cache. |
+| Full RAG + Redis | `docker compose -f docker-compose.yml -f docker-compose.rag.yml -f docker-compose.redis.yml up -d --build` | Full local reading assistant plus Redis cache. |
+
+Set `PREWARM_RAG_MODELS=true` with the RAG profile only when you want the image build to download models up front. Otherwise models are downloaded lazily on first RAG use and cached under `data/hf-cache`.
 
 Optional checks:
 
@@ -65,7 +78,7 @@ chmod +x scripts/start.sh
 scripts\Open_Web_Dashboard.bat
 ```
 
-The launcher creates a virtual environment, installs dependencies, helps create `.env`, checks Redis, downloads RAG models when needed, starts the backend, and opens the dashboard.
+The launcher creates a virtual environment, installs lightweight dependencies, helps create `.env`, optionally checks Redis, installs/downloads RAG dependencies only when `RAG_ENABLED=true`, starts the backend, and opens the dashboard.
 
 ### Manual Local Setup
 
@@ -84,6 +97,7 @@ cp .env.template .env
 
 # Optional: install only when RAG_ENABLED=true
 pip install -r requirements-rag.txt
+pip install -r requirements-mcp.txt  # only when running mcp_server.py
 python scripts/download_models.py
 
 uvicorn main:app --reload
@@ -98,8 +112,8 @@ uvicorn main:app --reload
 | `LLM_MODEL` | No | Defaults to `deepseek-chat`. |
 | `API_KEY` | No | When set, private API routes require `X-API-Key`. |
 | `PUBLIC_BASE_URL` | No | Public origin used in RSS/canonical links. |
-| `REDIS_URL` | No | Defaults to local Redis. |
-| `RAG_ENABLED` | No | Set `false` for lightweight deployments that do not need article-level RAG. |
+| `REDIS_URL` | No | Optional Redis cache URL. Docker Lite runs without Redis. |
+| `RAG_ENABLED` | No | Defaults to `false`; set `true` for article-level RAG. |
 | `CORS_ORIGINS` | No | Comma-separated browser origins. Use origins only; `*` disables credentialed CORS. |
 | `NOTIFY_CHANNELS` | No | Empty disables scheduled external notifications; use `email` for SMTP delivery. |
 

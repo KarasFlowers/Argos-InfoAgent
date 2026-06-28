@@ -62,7 +62,28 @@ if not exist "%PROJECT_ROOT%\.env" (
     )
 )
 
-REM --- 3) port-in-use shortcut ------------------------------------------
+REM --- 3) Optional RAG dependencies -------------------------------------
+set "RAG_ENABLED_EFFECTIVE=false"
+for /f "delims=" %%R in ('"%PROJECT_ROOT%\venv\Scripts\python.exe" "%PROJECT_ROOT%\scripts\resolve_rag_enabled.py"') do set "RAG_ENABLED_EFFECTIVE=%%R"
+
+if /i "%RAG_ENABLED_EFFECTIVE%"=="true" (
+    "%PROJECT_ROOT%\venv\Scripts\python.exe" -c "import sentence_transformers" > nul 2>&1
+    if errorlevel 1 (
+        echo [INFO] Installing RAG dependencies...
+        "%PROJECT_ROOT%\venv\Scripts\python.exe" -m pip install -r "%PROJECT_ROOT%\requirements-rag.txt"
+        if errorlevel 1 (
+            echo [ERROR] Failed to install RAG dependencies.
+            pause
+            exit /b 1
+        )
+    )
+    echo [INFO] Checking RAG model cache...
+    "%PROJECT_ROOT%\venv\Scripts\python.exe" "%PROJECT_ROOT%\scripts\download_models.py"
+) else (
+    echo [INFO] RAG_ENABLED=false; skipping RAG dependencies and embedding model download.
+)
+
+REM --- 4) port-in-use shortcut ------------------------------------------
 netstat -ano | findstr /r /c:":8000 .*LISTENING" > nul 2>&1
 if not errorlevel 1 (
     echo [INFO] Port 8000 is already in use. Opening the existing dashboard...
@@ -72,19 +93,25 @@ if not errorlevel 1 (
     exit /b 0
 )
 
-REM --- 4) Ensure Redis is running (idempotent) --------------------------
-echo Ensuring local Redis is running...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_ROOT%\scripts\setup_redis.ps1" > nul 2>&1
-if errorlevel 1 (
-    echo [WARN] Redis setup script failed. The app will still run, but caching will be disabled.
+REM --- 5) Check Redis only; cache is optional ----------------------------
+where redis-cli > nul 2>&1
+if not errorlevel 1 (
+    redis-cli ping > nul 2>&1
+    if errorlevel 1 (
+        echo [WARN] Redis is installed but not running. Caching will be disabled.
+    ) else (
+        echo [OK] Redis is running.
+    )
+) else (
+    echo [INFO] Redis not found. Caching will be disabled.
 )
 
-REM --- 5) Start backend in a visible window -----------------------------
+REM --- 6) Start backend in a visible window -----------------------------
 echo Starting Argos backend...
 start "Argos Backend" powershell.exe -NoExit -ExecutionPolicy Bypass -Command ^
     "& '%PROJECT_ROOT%\venv\Scripts\Activate.ps1'; Set-Location '%PROJECT_ROOT%'; uvicorn main:app --reload"
 
-REM --- 6) Poll /api/v1/ping until healthy (max ~30s) --------------------
+REM --- 7) Poll /api/v1/ping until healthy (max ~30s) --------------------
 echo Waiting for server to become healthy...
 set /a _tries=0
 :WAIT_LOOP

@@ -162,8 +162,8 @@ class Settings(BaseSettings):
     # set to "email" (or comma-separated channels) to enable scheduled pushes.
     NOTIFY_CHANNELS: str = ""
 
-    # RAG Feature Toggle (set to false to skip heavy model downloads)
-    RAG_ENABLED: bool = True
+    # RAG Feature Toggle (set to true for article-level RAG and local model downloads)
+    RAG_ENABLED: bool = False
 
     # RAG Vector Store
     CHROMA_DB_DIR: str = "./data/chroma"

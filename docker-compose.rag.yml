@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      args:
+        RAG_ENABLED: "true"
+        PREWARM_RAG_MODELS: ${PREWARM_RAG_MODELS:-false}
+    environment:
+      RAG_ENABLED: "true"
+      CHROMA_DB_DIR: ./data/chroma
+    volumes:
+      - ./data/chroma:/app/data/chroma
+      - ./data/hf-cache:/opt/hf-cache

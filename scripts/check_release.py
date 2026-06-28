@@ -15,6 +15,14 @@ DEFAULT_COMMANDS: list[tuple[str, list[str]]] = [
     ("Frontend syntax", ["node", "--check", "app/web/static/app.js"]),
     ("Frontend API key smoke", ["node", "scripts/frontend_auth_smoke.js"]),
     ("Docker Compose config", ["docker", "compose", "config", "--quiet"]),
+    (
+        "Docker Compose RAG config",
+        ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.rag.yml", "config", "--quiet"],
+    ),
+    (
+        "Docker Compose Redis config",
+        ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.redis.yml", "config", "--quiet"],
+    ),
     ("Tests", [sys.executable, "-m", "pytest"]),
     ("Runtime smoke", [sys.executable, "scripts/runtime_smoke.py", "--timeout", "90"]),
 ]

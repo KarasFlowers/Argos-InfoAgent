@@ -6,8 +6,8 @@ Usage:
     python scripts/download_models.py
 
 Models downloaded:
-    - BAAI/bge-m3          (~570 MB)  — Bi-Encoder for semantic search
-    - ms-marco-MiniLM-L-6  (~80 MB)  — Cross-Encoder for reranking
+    - BAAI/bge-m3          (~570 MB)  - Bi-Encoder for semantic search
+    - ms-marco-MiniLM-L-6  (~80 MB)  - Cross-Encoder for reranking
 """
 
 import sys
@@ -18,12 +18,12 @@ def main() -> int:
     import os
 
     print("=" * 50)
-    print("  Argos — Model Pre-Download")
+    print("  Argos - Model Pre-Download")
     print("=" * 50)
     print()
 
-    if os.environ.get("RAG_ENABLED", "true").lower() in ("false", "0", "no"):
-        print("[SKIP] RAG_ENABLED=false — model download not required.")
+    if os.environ.get("RAG_ENABLED", "false").lower() not in ("true", "1", "yes", "on"):
+        print("[SKIP] RAG_ENABLED=false - model download not required.")
         return 0
 
     try:
@@ -39,7 +39,7 @@ def main() -> int:
     ]
 
     for name, desc, loader in models:
-        print(f"[1/2] Downloading {name} — {desc} ...")
+        print(f"[1/2] Downloading {name} - {desc} ...")
         t0 = time.time()
         try:
             loader(name)

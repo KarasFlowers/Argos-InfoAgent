@@ -7,18 +7,47 @@ import yaml
 from scripts import docker_smoke
 
 
-def test_docker_compose_exposes_runtime_security_settings():
-    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
-    app_env = compose["services"]["app"]["environment"]
-    app_service = compose["services"]["app"]
-    redis_service = compose["services"]["redis"]
+def _compose(path: str = "docker-compose.yml") -> dict:
+    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
+
+def test_docker_compose_defaults_to_lightweight_app_only():
+    compose = _compose()
+    services = compose["services"]
+    app_service = services["app"]
+    app_env = app_service["environment"]
+    build_args = app_service["build"]["args"]
+
+    assert set(services) == {"app"}
     assert app_service["env_file"] == [{"path": ".env", "required": False}]
     assert "./.env:/app/.env:ro" not in app_service.get("volumes", [])
-    assert "API_KEY=${API_KEY:-}" in app_env
-    assert "PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:8000}" in app_env
-    assert "RAG_ENABLED=${RAG_ENABLED:-true}" in app_env
+    assert build_args["RAG_ENABLED"] == "${RAG_ENABLED:-false}"
+    assert build_args["PREWARM_RAG_MODELS"] == "${PREWARM_RAG_MODELS:-false}"
+    assert build_args["MCP_ENABLED"] == "${MCP_ENABLED:-false}"
+    assert app_env["API_KEY"] == "${API_KEY:-}"
+    assert app_env["PUBLIC_BASE_URL"] == "${PUBLIC_BASE_URL:-http://localhost:8000}"
+    assert app_env["RAG_ENABLED"] == "${RAG_ENABLED:-false}"
+
+
+def test_docker_compose_rag_override_enables_rag_and_model_cache():
+    override = _compose("docker-compose.rag.yml")
+    app_service = override["services"]["app"]
+
+    assert app_service["build"]["args"]["RAG_ENABLED"] == "true"
+    assert app_service["build"]["args"]["PREWARM_RAG_MODELS"] == "${PREWARM_RAG_MODELS:-false}"
+    assert app_service["environment"]["RAG_ENABLED"] == "true"
+    assert "./data/hf-cache:/opt/hf-cache" in app_service["volumes"]
+    assert "./data/chroma:/app/data/chroma" in app_service["volumes"]
+
+
+def test_docker_compose_redis_override_keeps_redis_internal():
+    override = _compose("docker-compose.redis.yml")
+    redis_service = override["services"]["redis"]
+    app_service = override["services"]["app"]
+
     assert "ports" not in redis_service
+    assert app_service["depends_on"]["redis"]["condition"] == "service_healthy"
+    assert app_service["environment"]["REDIS_URL"] == "redis://redis:6379"
 
 
 def test_docker_smoke_uses_private_runtime_settings(monkeypatch):
@@ -94,16 +123,21 @@ def test_docker_compose_config_allows_missing_env_file(tmp_path):
     if shutil.which("docker") is None:
         return
 
-    (tmp_path / "docker-compose.yml").write_text(
-        Path("docker-compose.yml").read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    for filename in ["docker-compose.yml", "docker-compose.rag.yml", "docker-compose.redis.yml"]:
+        (tmp_path / filename).write_text(Path(filename).read_text(encoding="utf-8"), encoding="utf-8")
 
-    result = subprocess.run(
+    commands = [
         ["docker", "compose", "config", "--quiet"],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+        ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.rag.yml", "config", "--quiet"],
+        ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.redis.yml", "config", "--quiet"],
+    ]
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
 
-    assert result.returncode == 0, result.stderr
+        assert result.returncode == 0, result.stderr
