@@ -9,13 +9,15 @@ INDEX_HTML = Path("app/web/templates/index.html")
 INDEX_CSS = Path("app/web/static/index.css")
 
 
-def test_dashboard_has_api_key_entrypoint_and_cache_bump():
+def test_dashboard_has_settings_entrypoint_and_cache_bump():
     html = INDEX_HTML.read_text(encoding="utf-8")
 
-    assert 'id="api-key-btn"' in html
-    assert "openApiKeyDialog()" in html
-    assert "/static/app.js?v=60" in html
-    assert "/static/index.css?v=50" in html
+    assert 'id="settings-btn"' in html
+    assert "toggleSettingsPanel()" in html
+    assert 'id="settings-api-key-input"' in html
+    assert 'id="settings-api-key-save" class="primary-btn" onclick="saveApiKeyFromSettings()">保存</button>' in html
+    assert "/static/app.js?v=62" in html
+    assert "/static/index.css?v=54" in html
 
 
 def test_frontend_fetch_wrapper_adds_api_key_only_to_same_origin_api_requests():
@@ -34,6 +36,8 @@ def test_frontend_fetch_wrapper_adds_api_key_only_to_same_origin_api_requests():
     assert "messageEl.setAttribute('role', 'alert')" in js
     assert "messageEl.setAttribute('role', 'status')" in js
     assert "async function saveApiKeyFromDialog()" in js
+    assert "async function saveApiKeyFromSettings()" in js
+    assert "API Key 已保存，后续请求会自动使用。" in js
     assert "_nativeFetch('/api/v1/status'" in js
     assert "[API_KEY_HEADER]: value" in js
     assert "API Key 未通过验证" in js
@@ -53,7 +57,7 @@ def test_frontend_api_key_modal_has_required_styles():
     assert ".api-key-modal-content" in css
     assert ".api-key-input-row:focus-within" in css
     assert ".api-key-toggle" in css
-    assert "#api-key-btn.has-api-key" in css
+    assert "#settings-btn.has-api-key" in css
 
 
 def test_frontend_auth_smoke_script_passes():

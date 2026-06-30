@@ -406,6 +406,14 @@ html.light-mode .more-menu {
 }
 
 /* News Cards Grid & Grouping */
+main,
+.overview-section,
+.source-analysis-section {
+    max-width: 760px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
 .news-grid {
     display: flex;
     flex-direction: column;
@@ -1083,6 +1091,33 @@ html.light-mode .more-menu {
 
 .retry-btn:hover {
     background: rgba(239, 68, 68, 0.2);
+}
+
+.error-message h3 {
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+}
+
+.error-message__detail {
+    margin-top: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+}
+
+.error-message__actions {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.retry-btn--secondary {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+}
+
+.retry-btn--secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
 }
 
 /* Animations */
@@ -3010,6 +3045,11 @@ html.light-mode .secondary-btn:disabled:hover {
     pointer-events: all;
 }
 
+body.rag-disabled .rag-overlay,
+body.rag-disabled .rag-panel {
+    display: none;
+}
+
 .rag-panel {
     position: fixed;
     top: 0;
@@ -3922,11 +3962,21 @@ html.light-mode .secondary-btn:disabled:hover {
         rgba(255, 255, 255, 0.03);
 }
 
+.sources-silent-mode-card.is-focused {
+    border-color: rgba(77, 190, 122, 0.38);
+    box-shadow: 0 0 0 3px rgba(77, 190, 122, 0.12);
+}
+
 html.light-mode .sources-silent-mode-card {
     border-color: rgba(0, 0, 0, 0.06);
     background:
         linear-gradient(135deg, rgba(77, 190, 122, 0.12), rgba(0, 0, 0, 0.015) 65%),
         var(--surface-color);
+}
+
+html.light-mode .sources-silent-mode-card.is-focused {
+    border-color: rgba(35, 113, 72, 0.28);
+    box-shadow: 0 0 0 3px rgba(35, 113, 72, 0.1);
 }
 
 .sources-silent-mode-card__top {
@@ -4793,6 +4843,281 @@ html.light-mode .sources-silent-mode-badge.is-error {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+}
+
+.settings-modal-content {
+    max-width: 840px !important;
+    width: 92%;
+}
+
+.settings-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.3rem 2rem 2rem;
+}
+
+.settings-section {
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.settings-section:first-child {
+    padding-top: 0;
+}
+
+.settings-section:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+}
+
+.settings-section-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.settings-section-header h4 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.98rem;
+    font-weight: 700;
+}
+
+.settings-section-hint,
+.settings-feedback {
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+}
+
+.settings-feedback.is-error {
+    color: #fca5a5;
+}
+
+.settings-runtime-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 0.8rem;
+}
+
+.runtime-setting-card {
+    padding: 1rem;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.runtime-setting-card__top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.85rem;
+}
+
+.runtime-setting-card__title {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+}
+
+.runtime-setting-card__summary {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.runtime-setting-badge {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    background: rgba(148, 163, 184, 0.14);
+    color: #cbd5e1;
+}
+
+.runtime-setting-badge.is-on {
+    background: rgba(34, 197, 94, 0.14);
+    color: #86efac;
+}
+
+.runtime-setting-badge.is-off {
+    background: rgba(148, 163, 184, 0.14);
+    color: #cbd5e1;
+}
+
+.runtime-setting-badge.is-warn {
+    background: rgba(245, 158, 11, 0.16);
+    color: #fcd34d;
+}
+
+.runtime-setting-card__details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.8rem;
+}
+
+.runtime-setting-card__details span {
+    min-width: 0;
+    padding: 0.26rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.045);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    overflow-wrap: anywhere;
+}
+
+.settings-note {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    padding: 0.85rem 0.95rem;
+    border-radius: 12px;
+    border: 1px solid rgba(147, 197, 253, 0.22);
+    background: rgba(147, 197, 253, 0.08);
+    color: #bfdbfe;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.settings-note strong {
+    color: var(--text-primary);
+}
+
+.settings-note code {
+    color: var(--text-primary);
+}
+
+.settings-automation-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 0.8rem;
+    margin-bottom: 0.9rem;
+}
+
+.settings-automation-card {
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-control-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.settings-control-row h5 {
+    margin: 0 0 0.3rem;
+    color: var(--text-primary);
+    font-size: 0.92rem;
+}
+
+.settings-control-row p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.settings-switch {
+    position: relative;
+    display: inline-flex;
+    width: 42px;
+    height: 24px;
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+
+.settings-switch input {
+    position: absolute;
+    opacity: 0;
+    inset: 0;
+}
+
+.settings-switch span {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.settings-switch span::after {
+    content: "";
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    top: 2px;
+    left: 2px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.18s ease;
+}
+
+.settings-switch input:checked + span {
+    background: rgba(34, 197, 94, 0.42);
+    border-color: rgba(34, 197, 94, 0.35);
+}
+
+.settings-switch input:checked + span::after {
+    transform: translateX(18px);
+}
+
+.settings-field-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-top: 0.9rem;
+}
+
+.settings-field-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.settings-field-row label {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.settings-field-row select,
+.settings-field-row input {
+    width: 100%;
+    min-width: 0;
+    height: 34px;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-color);
+    color: var(--text-primary);
+}
+
+.settings-last-run {
+    margin-top: 0.65rem;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    line-height: 1.45;
+}
+
+.settings-silent-mode-card {
+    border-radius: 8px;
+}
+
+.settings-api-key-body {
+    max-width: 560px;
 }
 
 .sources-placeholder {
@@ -6034,6 +6359,27 @@ html.light-mode .source-feed-item:hover {
     background: rgba(0, 0, 0, 0.045);
     border-color: rgba(0, 0, 0, 0.12);
 }
+html.light-mode .runtime-setting-card {
+    background: rgba(0, 0, 0, 0.025);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+html.light-mode .runtime-setting-card__details span {
+    background: rgba(0, 0, 0, 0.04);
+}
+html.light-mode .runtime-setting-badge.is-on {
+    color: #237148;
+}
+html.light-mode .runtime-setting-badge.is-off {
+    color: #475569;
+}
+html.light-mode .runtime-setting-badge.is-warn {
+    color: #b45309;
+}
+html.light-mode .settings-note {
+    color: #2563eb;
+    background: rgba(37, 99, 235, 0.06);
+    border-color: rgba(37, 99, 235, 0.14);
+}
 html.light-mode .wizard-progress__spinner {
     border-color: rgba(15, 23, 42, 0.16);
     border-top-color: var(--accent-color);
@@ -6171,11 +6517,11 @@ html.light-mode .close-btn:hover {
 }
 
 /* API Key Modal */
-#api-key-btn.has-api-key {
+#settings-btn.has-api-key {
     color: var(--text-primary);
 }
 
-#api-key-btn.has-api-key svg {
+#settings-btn.has-api-key svg {
     stroke: #22c55e;
 }
 

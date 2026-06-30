@@ -22,6 +22,14 @@ def test_explain_item_uses_fallback_reason_without_preferences():
 
     assert item.preference_matches == []
     assert item.recommendation_reason
+    assert item.assistant_questions == []
+
+
+def test_explain_item_builds_assistant_questions_when_rag_enabled(monkeypatch):
+    monkeypatch.setattr("app.services.recommendation_explain.settings.RAG_ENABLED", True)
+
+    item = explain_item(_item(), {})
+
     assert item.assistant_questions
 
 

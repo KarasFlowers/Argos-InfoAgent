@@ -287,6 +287,27 @@ def _run_silent_mode() -> None:
         logger.exception("Scheduled silent mode failed")
 
 
+def _run_weekly_auto_report() -> None:
+    """Synchronous wrapper — generate the configured weekly report."""
+    try:
+        asyncio.run(_async_weekly_auto_report())
+    except Exception as exc:
+        try:
+            from app.services.automation_settings import record_weekly_auto_report_run
+
+            record_weekly_auto_report_run(
+                {
+                    "ok": False,
+                    "reason": str(exc) or exc.__class__.__name__,
+                    "board": "unknown",
+                    "generated_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        except Exception:
+            logger.exception("Failed to record weekly auto report failure")
+        logger.exception("Scheduled weekly auto report failed")
+
+
 async def _async_auto_extract_memories() -> None:
     from app.core.db import AsyncSessionLocal
     from app.services.memory_service import auto_extract_memories
@@ -314,6 +335,84 @@ async def _async_silent_mode() -> None:
                 logger.info("Silent mode export complete: %s", result)
             else:
                 logger.info("Silent mode skipped: %s", result.get("reason"))
+
+
+async def _async_weekly_auto_report() -> None:
+    from app.api.boards import resolve_active_board
+    from app.services.automation_settings import (
+        get_automation_settings,
+        record_weekly_auto_report_run,
+        weekly_report_output_path,
+    )
+    from app.services.db_service import db_service
+    from app.services.llm_service import llm_service
+
+    cfg = get_automation_settings()
+    if not cfg.get("weekly_auto_report_enabled"):
+        logger.info("Weekly auto report skipped: disabled")
+        return
+
+    async with track_task_run("weekly_report", trigger_type="scheduled") as tr:
+        tr.progress_label = "generating weekly report"
+        async with AsyncSessionLocal() as session:
+            board_slug = cfg.get("weekly_auto_report_board") or None
+            board = await resolve_active_board(session, board_slug)
+            board_id = board.id if board else None
+            board_label = getattr(board, "slug", None) or "default"
+
+            history = await db_service.get_summary_history(session, limit=7, board_id=board_id)
+            if not history.archive_items:
+                result = {
+                    "ok": False,
+                    "reason": "No history found to summarize.",
+                    "board": board_label,
+                    "generated_at": datetime.now(UTC).isoformat(),
+                }
+                record_weekly_auto_report_run(result)
+                logger.info("Weekly auto report skipped: %s", result["reason"])
+                return
+
+            summaries_data = []
+            for item in history.archive_items:
+                full = await db_service.get_summary_by_date(session, item.date, board_id=board_id)
+                if full:
+                    summaries_data.append(full.model_dump())
+
+            if not summaries_data:
+                result = {
+                    "ok": False,
+                    "reason": "Failed to retrieve history content.",
+                    "board": board_label,
+                    "generated_at": datetime.now(UTC).isoformat(),
+                }
+                record_weekly_auto_report_run(result)
+                logger.info("Weekly auto report skipped: %s", result["reason"])
+                return
+
+            tr.progress_total = 1
+            await tr.save_progress()
+            report = await llm_service.generate_weekly_consolidation(
+                summaries_data,
+                output_language=getattr(board, "output_language", None),
+            )
+            if not report:
+                raise RuntimeError("Failed to generate weekly report.")
+
+            generated_at = datetime.now(UTC)
+            output_path = weekly_report_output_path(board_label, generated_at=generated_at)
+            output_path.write_text(report, encoding="utf-8")
+            tr.progress_current = 1
+            await tr.save_progress()
+
+            result = {
+                "ok": True,
+                "board": board_label,
+                "generated_at": generated_at.isoformat(),
+                "output_path": str(output_path),
+                "summary_count": len(summaries_data),
+            }
+            record_weekly_auto_report_run(result)
+            logger.info("Weekly auto report generated: %s", output_path)
 
 
 async def _async_push_boards(
@@ -422,6 +521,45 @@ async def _register_board_schedules() -> None:
     await _async_register_board_schedules()
 
 
+def _register_weekly_auto_report_schedule() -> None:
+    if _scheduler is None:
+        return
+    try:
+        from app.services.automation_settings import get_automation_settings
+
+        cfg = get_automation_settings()
+        if not cfg.get("weekly_auto_report_enabled"):
+            logger.info("Weekly auto report schedule disabled")
+            return
+        parsed = _parse_hhmm(cfg.get("weekly_auto_report_time", "18:00"))
+        if not parsed:
+            logger.error("Invalid weekly auto report time: %s", cfg.get("weekly_auto_report_time"))
+            return
+        hour, minute = parsed
+        day = int(cfg.get("weekly_auto_report_day", 6))
+        _scheduler.add_job(
+            _run_weekly_auto_report,
+            trigger=CronTrigger(day_of_week=day, hour=hour, minute=minute),
+            id="weekly_auto_report",
+            name="Weekly auto report",
+            replace_existing=True,
+        )
+        logger.info("Scheduled weekly auto report for day %s at %02d:%02d", day, hour, minute)
+    except Exception:
+        logger.exception("Failed to register weekly auto report schedule")
+
+
+def refresh_weekly_auto_report_schedule() -> None:
+    """Re-register the weekly auto-report job after runtime settings change."""
+    if _scheduler is None:
+        return
+    try:
+        _scheduler.remove_job("weekly_auto_report")
+    except Exception:
+        pass
+    _register_weekly_auto_report_schedule()
+
+
 async def _async_register_board_schedules() -> None:
     from app.core.db import AsyncSessionLocal
     from app.services.db_service import db_service
@@ -513,7 +651,10 @@ async def start_scheduler() -> None:
     # 5. Per-board schedules (async — reads from DB)
     await _register_board_schedules()
 
-    # 6. Silent mode background exports, gated by PC idle time
+    # 6. Weekly local report generation
+    _register_weekly_auto_report_schedule()
+
+    # 7. Silent mode background exports, gated by PC idle time
     if settings.SILENT_MODE_ENABLED:
         _scheduler.add_job(
             _run_silent_mode,

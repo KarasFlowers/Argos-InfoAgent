@@ -116,3 +116,21 @@ async def test_mark_stale_task_runs_marks_only_expired_running_rows(task_session
     assert runs["old"].finished_at is not None
     assert runs["fresh"].status == "running"
     assert runs["done"].status == "done"
+
+
+def test_weekly_auto_report_wrapper_records_unhandled_failure(monkeypatch):
+    recorded = {}
+
+    async def fail_weekly_report():
+        raise RuntimeError("boom")
+
+    def fake_record(result):
+        recorded.update(result)
+
+    monkeypatch.setattr(scheduler, "_async_weekly_auto_report", fail_weekly_report)
+    monkeypatch.setattr("app.services.automation_settings.record_weekly_auto_report_run", fake_record)
+
+    scheduler._run_weekly_auto_report()
+
+    assert recorded["ok"] is False
+    assert recorded["reason"] == "boom"

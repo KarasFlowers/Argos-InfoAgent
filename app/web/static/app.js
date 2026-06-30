@@ -17,6 +17,8 @@ let currentCoverageContext = null;
 let currentCoverageFocusClusterId = null;
 let currentCoverageRequestId = 0;
 let currentSilentModeStatus = null;
+let weeklyAutoReportSettingsSnapshot = null;
+let ragFeatureAvailable = false;
 let availablePromptTemplates = [];
 let overlayFocusStack = [];
 let apiKeySaveInFlight = false;
@@ -44,6 +46,7 @@ const OVERLAY_DIALOG_LABELS = {
     'stats-modal': '数据统计',
     'board-modal': '板块管理',
     'saved-modal': '我的收藏',
+    'settings-modal': '设置',
     'rag-panel': '深度追问',
     'api-key-panel': 'API Key'
 };
@@ -89,24 +92,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     _initTheme();
     ensureApiKeyPanel();
     updateApiKeyButtonState();
-    _primeBoardSlugFromStorage();
     setupOverlayExperience();
     setupBoardFormExperience();
 
-    // Render any same-day cache before non-critical bootstrap work.
+    await initBoards();
+
+    // Render any same-day cache after the active board has been validated.
     const cached = _loadCachedSummary();
     if (cached) {
         _renderSummaryData(cached);
     }
 
     const promptTemplatesPromise = loadPromptTemplates();
+    const ragAvailabilityPromise = loadRagAvailability();
 
     setupRagPanel();
     setupHistoryPanel();
     _refreshCatchupBadge();
     loadSavedState();
 
-    await initBoards();
+    await ragAvailabilityPromise;
     fetchSummary();
     await promptTemplatesPromise;
 });
@@ -202,11 +207,39 @@ function ensureApiKeyPanel() {
 }
 
 function updateApiKeyButtonState() {
-    const button = document.getElementById('api-key-btn');
-    if (!button) return;
+    const button = document.getElementById('settings-btn');
     const hasKey = !!_getStoredApiKey();
-    button.classList.toggle('has-api-key', hasKey);
-    button.title = hasKey ? '更新 API Key' : '设置 API Key';
+    if (button) {
+        button.classList.toggle('has-api-key', hasKey);
+        button.title = hasKey ? '设置 · 已保存本地 API Key' : '设置';
+    }
+    const state = document.getElementById('settings-api-key-state');
+    if (state) {
+        state.textContent = hasKey ? '已保存' : '未保存';
+    }
+    const input = document.getElementById('settings-api-key-input');
+    if (input && !document.activeElement?.isSameNode(input)) {
+        input.value = _getStoredApiKey();
+    }
+}
+
+async function loadRagAvailability() {
+    try {
+        const response = await fetch('/api/v1/rag/enabled');
+        if (!response.ok) {
+            throw new Error(await readResponseError(response, '读取 RAG 状态失败'));
+        }
+        const data = await response.json();
+        ragFeatureAvailable = !!(data.enabled && data.available);
+    } catch (error) {
+        console.warn('Failed to load RAG availability:', error);
+        ragFeatureAvailable = false;
+    }
+    document.body.classList.toggle('rag-disabled', !ragFeatureAvailable);
+    if (!ragFeatureAvailable && isRagPanelOpen()) {
+        closeRagPanel();
+    }
+    return ragFeatureAvailable;
 }
 
 function openApiKeyDialog(message = '') {
@@ -316,6 +349,103 @@ function clearApiKeyAndReload() {
     _setStoredApiKey('');
     updateApiKeyButtonState();
     window.location.reload();
+}
+
+function populateSettingsApiKey() {
+    const input = document.getElementById('settings-api-key-input');
+    const toggle = document.getElementById('settings-api-key-toggle');
+    const messageEl = document.getElementById('settings-api-key-message');
+    if (input) {
+        input.type = 'password';
+        input.value = _getStoredApiKey();
+    }
+    if (toggle) toggle.textContent = '显示';
+    if (messageEl) {
+        messageEl.setAttribute('role', 'status');
+        messageEl.setAttribute('aria-live', 'polite');
+        messageEl.textContent = _getStoredApiKey() ? '密钥仅保存在当前浏览器。' : '需要访问受保护接口时，可在这里保存本地 X-API-Key。';
+    }
+    updateApiKeyButtonState();
+}
+
+function toggleSettingsApiKeyVisibility() {
+    const input = document.getElementById('settings-api-key-input');
+    const toggle = document.getElementById('settings-api-key-toggle');
+    if (!input || !toggle) return;
+    const shouldShow = input.type === 'password';
+    input.type = shouldShow ? 'text' : 'password';
+    toggle.textContent = shouldShow ? '隐藏' : '显示';
+}
+
+async function saveApiKeyFromSettings() {
+    if (apiKeySaveInFlight) return;
+    const input = document.getElementById('settings-api-key-input');
+    const value = input ? input.value.trim() : '';
+    const messageEl = document.getElementById('settings-api-key-message');
+    const saveButton = document.getElementById('settings-api-key-save');
+    if (!value) {
+        if (messageEl) {
+            messageEl.setAttribute('role', 'alert');
+            messageEl.textContent = 'API Key 不能为空。';
+        }
+        return;
+    }
+
+    if (messageEl) {
+        messageEl.setAttribute('role', 'status');
+        messageEl.textContent = '正在验证 API Key...';
+    }
+    apiKeySaveInFlight = true;
+    if (saveButton) {
+        saveButton.disabled = true;
+        saveButton.textContent = '验证中...';
+    }
+    try {
+        const response = await _nativeFetch('/api/v1/status', {
+            headers: { [API_KEY_HEADER]: value }
+        });
+        if (response.status === 403) {
+            if (messageEl) {
+                messageEl.setAttribute('role', 'alert');
+                messageEl.textContent = 'API Key 未通过验证，请检查 .env 中的 API_KEY。';
+            }
+            return;
+        }
+        if (!response.ok) {
+            if (messageEl) {
+                messageEl.setAttribute('role', 'alert');
+                messageEl.textContent = `验证失败：HTTP ${response.status}`;
+            }
+            return;
+        }
+        _setStoredApiKey(value);
+        updateApiKeyButtonState();
+        if (messageEl) {
+            messageEl.setAttribute('role', 'status');
+            messageEl.textContent = 'API Key 已保存，后续请求会自动使用。';
+        }
+    } catch (error) {
+        if (messageEl) {
+            messageEl.setAttribute('role', 'alert');
+            messageEl.textContent = `无法验证 API Key：${error.message}`;
+        }
+    } finally {
+        apiKeySaveInFlight = false;
+        if (saveButton) {
+            saveButton.disabled = false;
+            saveButton.textContent = '保存';
+        }
+    }
+}
+
+function clearApiKeyFromSettings() {
+    _setStoredApiKey('');
+    populateSettingsApiKey();
+    const messageEl = document.getElementById('settings-api-key-message');
+    if (messageEl) {
+        messageEl.setAttribute('role', 'status');
+        messageEl.textContent = '本地 API Key 已清除。';
+    }
 }
 
 function _initTheme() {
@@ -493,6 +623,7 @@ function dismissTopOverlay() {
         ['stats-modal', toggleStatsPanel],
         ['coverage-modal', closeCoverageModal],
         ['sources-modal', toggleSourcesPanel],
+        ['settings-modal', toggleSettingsPanel],
         ['magazine-modal', toggleMagazinePanel],
         ['catchup-modal', toggleCatchupPanel],
         ['history-modal', toggleHistoryPanel],
@@ -537,7 +668,7 @@ function showLoadingState(message = SUMMARY_LOADING_TEXT) {
     loadingState.appendChild(text);
 }
 
-function showErrorState(message, retryHandler) {
+function showErrorState(message, retryHandler, options = {}) {
     const loadingState = document.getElementById('loading-state');
     clearElement(loadingState);
     loadingState.style.display = 'flex';
@@ -545,18 +676,62 @@ function showErrorState(message, retryHandler) {
     const box = document.createElement('div');
     box.className = 'error-message';
 
+    if (options.title) {
+        const title = document.createElement('h3');
+        title.textContent = options.title;
+        box.appendChild(title);
+    }
+
     const text = document.createElement('p');
-    text.textContent = `获取简报失败: ${message}`;
+    text.textContent = options.description || `获取简报失败: ${message}`;
+    box.appendChild(text);
+
+    if (Array.isArray(options.details)) {
+        options.details.filter(Boolean).forEach((detail) => {
+            const detailEl = document.createElement('p');
+            detailEl.className = 'error-message__detail';
+            detailEl.textContent = detail;
+            box.appendChild(detailEl);
+        });
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'error-message__actions';
+
+    for (const action of options.actions || []) {
+        if (!action || typeof action.handler !== 'function') continue;
+        const actionButton = document.createElement('button');
+        actionButton.className = action.className || 'retry-btn';
+        actionButton.type = 'button';
+        actionButton.textContent = action.label || '继续';
+        actionButton.addEventListener('click', action.handler);
+        actions.appendChild(actionButton);
+    }
 
     const retryButton = document.createElement('button');
     retryButton.className = 'retry-btn';
     retryButton.type = 'button';
-    retryButton.textContent = '重试';
+    retryButton.textContent = options.retryLabel || '重试';
     retryButton.addEventListener('click', retryHandler);
+    actions.appendChild(retryButton);
 
-    box.appendChild(text);
-    box.appendChild(retryButton);
+    box.appendChild(actions);
     loadingState.appendChild(box);
+}
+
+function showLlmMissingState(retryHandler = () => fetchSummary()) {
+    showErrorState('LLM API key 未配置', retryHandler, {
+        title: '未配置 LLM API Key',
+        description: '当前还不能生成 AI 简报。请在项目根目录的 .env 中配置 LLM_API_KEY 或 DEEPSEEK_API_KEY，然后重启本地服务。',
+        details: ['服务端密钥不会保存在前端；设置面板只显示只读运行状态。'],
+        actions: [
+            {
+                label: '打开设置',
+                className: 'retry-btn retry-btn--secondary',
+                handler: () => toggleSettingsPanel(),
+            },
+        ],
+    });
 }
 
 function setSummaryFeedback(message, type = 'info') {
@@ -598,6 +773,9 @@ async function initBoards() {
         } else {
             const def = availableBoards.find(b => b.is_default);
             currentBoardSlug = def ? def.slug : availableBoards[0].slug;
+            if (saved) {
+                try { localStorage.removeItem('argos_board'); } catch (_) {}
+            }
         }
 
         container.style.display = 'flex';
@@ -2777,6 +2955,28 @@ function _clearCachedSummary() {
     } catch { /* ignore */ }
 }
 
+async function shouldBlockSummaryGenerationForMissingLlm(url) {
+    if (latestData) return false;
+    try {
+        const target = new URL(url, window.location.origin);
+        if (target.searchParams.has('date') || target.searchParams.get('force') === 'true') {
+            return false;
+        }
+    } catch (_) {
+        return false;
+    }
+
+    try {
+        const response = await fetch('/api/v1/status');
+        if (!response.ok) return false;
+        const data = await response.json();
+        return data?.features?.llm_configured === false;
+    } catch (error) {
+        console.warn('Failed to preflight summary status:', error);
+        return false;
+    }
+}
+
 function _renderSummaryData(data) {
     const loadingState = document.getElementById('loading-state');
     const contentState = document.getElementById('content-state');
@@ -2825,6 +3025,12 @@ async function fetchSummaryWithUrl(url, retainedContentMessage = '正在刷新�
             setSummaryFeedback(retainedContentMessage, 'info');
         }
 
+        if (await shouldBlockSummaryGenerationForMissingLlm(url)) {
+            if (thisFetchId !== _summaryFetchId) return;
+            showLlmMissingState(() => fetchSummary());
+            return;
+        }
+
         const response = await fetch(url, { signal: _summaryAbortController.signal });
         if (!response.ok) {
             throw new Error(await readResponseError(response, '读取简报失败'));
@@ -2842,12 +3048,21 @@ async function fetchSummaryWithUrl(url, retainedContentMessage = '正在刷新�
         console.error('Failed to fetch summary:', error);
         // Only show error state if this is still the latest fetch and we have no cached data
         if (thisFetchId === _summaryFetchId && !hasCachedData) {
-            showErrorState(error.message, () => fetchSummary());
+            if (isMissingLlmError(error.message)) {
+                showLlmMissingState(() => fetchSummary());
+            } else {
+                showErrorState(error.message, () => fetchSummary());
+            }
         } else if (thisFetchId === _summaryFetchId) {
             setSummaryFeedback(`刷新简报失败：${error.message}。当前仍显示上次成功生成的内容。`, 'error');
             if (refreshBtn) refreshBtn.style.display = 'inline-flex';
         }
     }
+}
+
+function isMissingLlmError(message) {
+    const raw = String(message || '').toLowerCase();
+    return raw.includes('llm api key') || raw.includes('llm_api_key') || raw.includes('deepseek_api_key');
 }
 
 function renderHome() {
@@ -3406,19 +3621,9 @@ function createNewsCard(newsItem, index) {
     feedbackContainer.appendChild(favoriteButton);
     feedbackContainer.appendChild(readLaterButton);
 
-    const askButton = document.createElement('button');
-    askButton.type = 'button';
-    askButton.className = 'ask-btn';
-    askButton.disabled = !safeLink;
-    askButton.addEventListener('click', () => openRagPanel(
-        newsItem.original_link,
-        newsItem.headline || '未命名资讯',
-        newsItem
-    ));
-    appendStaticIcon(askButton, ICONS.ask);
-    askButton.appendChild(document.createTextNode('深度追问'));
-
-    const questions = Array.isArray(newsItem.assistant_questions) ? newsItem.assistant_questions.filter(Boolean) : [];
+    const questions = ragFeatureAvailable && Array.isArray(newsItem.assistant_questions)
+        ? newsItem.assistant_questions.filter(Boolean)
+        : [];
     if (questions.length > 0) {
         const questionRow = document.createElement('div');
         questionRow.className = 'assistant-question-row';
@@ -3444,7 +3649,20 @@ function createNewsCard(newsItem, index) {
     }
 
     actions.appendChild(feedbackContainer);
-    actions.appendChild(askButton);
+    if (ragFeatureAvailable) {
+        const askButton = document.createElement('button');
+        askButton.type = 'button';
+        askButton.className = 'ask-btn';
+        askButton.disabled = !safeLink;
+        askButton.addEventListener('click', () => openRagPanel(
+            newsItem.original_link,
+            newsItem.headline || '未命名资讯',
+            newsItem
+        ));
+        appendStaticIcon(askButton, ICONS.ask);
+        askButton.appendChild(document.createTextNode('深度追问'));
+        actions.appendChild(askButton);
+    }
 
     footer.appendChild(readMore);
     footer.appendChild(actions);
@@ -4652,6 +4870,11 @@ function setupRagPanel() {
 }
 
 async function openRagPanel(url, headline, newsItem = null, initialQuestion = '') {
+    if (!ragFeatureAvailable) {
+        setSummaryFeedback('RAG 已关闭，深度追问不可用。可在设置里查看 RAG 状态。', 'info');
+        return;
+    }
+
     const panelUrl = url;
     currentUrl = panelUrl;
     isIngesting = true;
@@ -5692,8 +5915,218 @@ function toggleSourcesPanel() {
     const modal = document.getElementById('sources-modal');
     if (!modal) return;
     if (toggleOverlay(modal, '#new-source-url')) {
-        refreshSilentModeStatus();
         loadSourcesForCurrentBoard();
+    }
+}
+
+function runtimeStatusBadge(ok, labels = {}) {
+    if (ok) {
+        return { cls: 'is-on', text: labels.on || '已启用' };
+    }
+    return { cls: 'is-off', text: labels.off || '未启用' };
+}
+
+function renderRuntimeSettingCard(item) {
+    const badge = item.badge || runtimeStatusBadge(false);
+    const details = Array.isArray(item.details) ? item.details.filter(Boolean) : [];
+    return `
+        <article class="runtime-setting-card settings-status-card">
+            <div class="runtime-setting-card__top">
+                <div>
+                    <div class="runtime-setting-card__title">${escapeHtml(item.title)}</div>
+                    <p class="runtime-setting-card__summary">${escapeHtml(item.summary || '')}</p>
+                </div>
+                <span class="runtime-setting-badge ${escapeHtml(badge.cls)}">${escapeHtml(badge.text)}</span>
+            </div>
+            ${details.length ? `
+                <div class="runtime-setting-card__details">
+                    ${details.map(detail => `<span>${escapeHtml(detail)}</span>`).join('')}
+                </div>
+            ` : ''}
+        </article>
+    `;
+}
+
+async function loadRuntimeSettings() {
+    const feedback = document.getElementById('settings-runtime-feedback');
+    const grid = document.getElementById('settings-runtime-grid');
+    if (!feedback || !grid) return;
+
+    feedback.textContent = '正在读取运行设置...';
+    feedback.className = 'settings-feedback';
+    grid.innerHTML = '';
+
+    try {
+        const [statusRes, ragRes] = await Promise.all([
+            fetch('/api/v1/status'),
+            fetch('/api/v1/rag/enabled'),
+        ]);
+        if (!statusRes.ok) throw new Error(await readResponseError(statusRes, '读取系统状态失败'));
+        if (!ragRes.ok) throw new Error(await readResponseError(ragRes, '读取 RAG 状态失败'));
+
+        const status = await statusRes.json();
+        const rag = await ragRes.json();
+        const features = status.features || {};
+        const databaseOk = !!status.database?.ok;
+        const ragEnabled = !!rag.enabled;
+        const ragAvailable = !!rag.available;
+
+        feedback.textContent = `项目：${status.project || 'Argos'} · 版本：${status.version || '--'}`;
+        const cards = [
+            {
+                title: 'RAG 深度追问',
+                summary: ragEnabled
+                    ? (ragAvailable ? '已启用且依赖可用，可用于文章追问和全局检索。' : '已启用，但依赖或向量库不可用。')
+                    : '当前关闭。要启用请设置 RAG_ENABLED=true 并安装 RAG 依赖。',
+                badge: ragEnabled && ragAvailable
+                    ? runtimeStatusBadge(true, { on: '可用' })
+                    : { cls: ragEnabled ? 'is-warn' : 'is-off', text: ragEnabled ? '需检查' : '已关闭' },
+                details: [
+                    `RAG_ENABLED=${ragEnabled ? 'true' : 'false'}`,
+                    `后台索引=${features.rag_background_ingest ? '开启' : '关闭'}`,
+                    rag.message || '',
+                ],
+            },
+            {
+                title: 'LLM 配置',
+                summary: features.llm_configured ? '已检测到可用的 LLM API Key。' : '未检测到 LLM API Key，生成类功能可能不可用。',
+                badge: runtimeStatusBadge(!!features.llm_configured, { on: '已配置', off: '未配置' }),
+                details: ['配置项来自 .env，不在前端保存服务端密钥。'],
+            },
+            {
+                title: 'API Key 保护',
+                summary: features.api_key_auth ? '后端接口已启用 X-API-Key 校验。' : '当前未启用后端 API Key 校验。',
+                badge: runtimeStatusBadge(!!features.api_key_auth, { on: '已开启', off: '未开启' }),
+                details: [features.api_key_auth ? '前端可在“访问密钥”中保存本地浏览器使用的 X-API-Key。' : '本地使用通常可以关闭；对外暴露前应开启。'],
+            },
+            {
+                title: '向导流水线',
+                summary: features.wizard_pipeline ? '新建板块 AI 向导使用完整流水线。' : '新建板块 AI 向导流水线未启用。',
+                badge: runtimeStatusBadge(!!features.wizard_pipeline, { on: '已启用', off: '未启用' }),
+                details: ['影响“添加板块”里的 AI 向导体验。'],
+            },
+            {
+                title: '通知渠道',
+                summary: features.notifications_configured ? '已配置通知渠道。' : '未配置通知渠道。',
+                badge: runtimeStatusBadge(!!features.notifications_configured, { on: '已配置', off: '未配置' }),
+                details: ['配置项：NOTIFY_CHANNELS 等通知相关环境变量。'],
+            },
+            {
+                title: '数据库',
+                summary: databaseOk ? '数据库连接正常。' : '数据库连接异常，部分功能可能不可用。',
+                badge: runtimeStatusBadge(databaseOk, { on: '正常', off: '异常' }),
+                details: [`状态：${status.status || '--'}`],
+            },
+        ];
+        grid.innerHTML = cards.map(renderRuntimeSettingCard).join('');
+    } catch (error) {
+        feedback.textContent = `运行设置读取失败：${error.message}`;
+        feedback.className = 'settings-feedback is-error';
+    }
+}
+
+function toggleSettingsPanel() {
+    const modal = document.getElementById('settings-modal');
+    if (!modal) return;
+    if (toggleOverlay(modal, '#settings-runtime-feedback')) {
+        loadSettingsPanel();
+    }
+}
+
+function loadSettingsPanel() {
+    populateSettingsApiKey();
+    loadRuntimeSettings();
+    refreshSilentModeStatus();
+    _loadCatchupConfig();
+    loadWeeklyAutoReportSettings();
+}
+
+function setWeeklyAutoReportStatus(message, type = 'info') {
+    const status = document.getElementById('weekly-auto-report-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = `catchup-config-status${message ? ' is-visible' : ''}${type === 'error' ? ' is-error' : type === 'success' ? ' is-success' : ''}`;
+    status.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    status.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+}
+
+function renderWeeklyAutoReportLastRun(lastRun) {
+    const target = document.getElementById('weekly-auto-report-last-run');
+    if (!target) return;
+    if (!lastRun) {
+        target.textContent = '最近运行：暂无记录';
+        return;
+    }
+    const ok = !!lastRun.ok;
+    const generatedAt = lastRun.generated_at ? formatDateTime(lastRun.generated_at) : '--';
+    const board = lastRun.board || '--';
+    const detail = ok
+        ? `成功 · ${lastRun.summary_count || 0} 条摘要`
+        : `未生成 · ${lastRun.reason || '无可用内容'}`;
+    target.textContent = `最近运行：${generatedAt} · ${board} · ${detail}`;
+}
+
+function applyWeeklyAutoReportSettings(data) {
+    weeklyAutoReportSettingsSnapshot = data || null;
+    const enabled = document.getElementById('weekly-auto-report-enabled');
+    const day = document.getElementById('weekly-auto-report-day');
+    const time = document.getElementById('weekly-auto-report-time');
+    const hint = document.getElementById('weekly-auto-report-hint');
+    if (enabled) enabled.checked = !!data?.weekly_auto_report_enabled;
+    if (day) day.value = String(data?.weekly_auto_report_day ?? 6);
+    if (time) time.value = data?.weekly_auto_report_time || '18:00';
+    const currentBoard = _getCurrentBoardObj();
+    if (hint) {
+        hint.textContent = currentBoard?.slug
+            ? `为「${currentBoard.name || currentBoard.slug}」本地生成并缓存周刊，不默认通知。`
+            : '为默认板块本地生成并缓存周刊，不默认通知。';
+    }
+    renderWeeklyAutoReportLastRun(data?.weekly_auto_report_last_run || null);
+}
+
+async function loadWeeklyAutoReportSettings() {
+    setWeeklyAutoReportStatus('正在读取周刊自动化设置...');
+    try {
+        const resp = await fetch('/api/v1/settings/automation');
+        if (!resp.ok) throw new Error(await readResponseError(resp, '读取周刊自动化设置失败'));
+        const data = await resp.json();
+        applyWeeklyAutoReportSettings(data);
+        setWeeklyAutoReportStatus('');
+    } catch (error) {
+        setWeeklyAutoReportStatus(`周刊自动化读取失败：${error.message}`, 'error');
+    }
+}
+
+async function saveWeeklyAutoReportSettings() {
+    const enabled = document.getElementById('weekly-auto-report-enabled');
+    const day = document.getElementById('weekly-auto-report-day');
+    const time = document.getElementById('weekly-auto-report-time');
+    const board = _getCurrentBoardObj();
+    const payload = {
+        weekly_auto_report_enabled: !!enabled?.checked,
+        weekly_auto_report_day: parseInt(day?.value || '6', 10),
+        weekly_auto_report_time: time?.value || '18:00',
+        weekly_auto_report_board: board?.slug || '',
+    };
+
+    setWeeklyAutoReportStatus('正在保存周刊自动化设置...');
+    try {
+        const resp = await fetch('/api/v1/settings/automation', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) throw new Error(await readResponseError(resp, '保存周刊自动化设置失败'));
+        const data = await resp.json();
+        applyWeeklyAutoReportSettings(data);
+        setWeeklyAutoReportStatus('周刊自动化设置已保存。', 'success');
+    } catch (error) {
+        setWeeklyAutoReportStatus(`周刊自动化保存失败，已恢复服务器设置：${error.message}`, 'error');
+        if (weeklyAutoReportSettingsSnapshot) {
+            applyWeeklyAutoReportSettings(weeklyAutoReportSettingsSnapshot);
+        } else {
+            await loadWeeklyAutoReportSettings();
+        }
     }
 }
 
@@ -6939,7 +7372,7 @@ async function updateCatchupDays(days) {
     setCatchupConfigStatus('正在保存补读设置...');
     try {
         const slug = currentBoardSlug || '';
-        if (!slug) return;
+        if (!slug) throw new Error('请先选择一个板块。');
         const response = await fetch(`/api/v1/boards/${encodeURIComponent(slug)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },

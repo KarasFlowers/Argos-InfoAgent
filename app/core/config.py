@@ -194,6 +194,11 @@ class Settings(BaseSettings):
     # into the editorial. Off by default — daily summary flow is unaffected.
     WEEKLY_ENRICH_ENABLED: bool = False
     WEEKLY_ENRICH_MAX_THEMES: int = 3  # How many top themes to enrich per weekly run
+    WEEKLY_AUTO_REPORT_ENABLED: bool = False
+    WEEKLY_AUTO_REPORT_DAY: int = 6  # 0=Monday, 6=Sunday
+    WEEKLY_AUTO_REPORT_TIME: str = "18:00"
+    WEEKLY_AUTO_REPORT_BOARD: str = ""
+    WEEKLY_AUTO_REPORT_OUTPUT_DIR: str = "./data/weekly_reports"
 
     # --- Multi-source scraper defaults ---
     GITHUB_TOKEN: str | None = None  # Optional: raises GitHub API rate limit
@@ -235,6 +240,11 @@ class Settings(BaseSettings):
     def resolve_silent_mode_output_dir(cls, value: str) -> str:
         return _resolve_path(value)
 
+    @field_validator("WEEKLY_AUTO_REPORT_OUTPUT_DIR", mode="before")
+    @classmethod
+    def resolve_weekly_auto_report_output_dir(cls, value: str) -> str:
+        return _resolve_path(value)
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: Any) -> Any:
@@ -261,6 +271,18 @@ class Settings(BaseSettings):
     @classmethod
     def validate_daily_push_time(cls, value: str) -> str:
         return _validate_hhmm_time(value, field_name="DAILY_PUSH_TIME")
+
+    @field_validator("WEEKLY_AUTO_REPORT_TIME")
+    @classmethod
+    def validate_weekly_auto_report_time(cls, value: str) -> str:
+        return _validate_hhmm_time(value, field_name="WEEKLY_AUTO_REPORT_TIME")
+
+    @field_validator("WEEKLY_AUTO_REPORT_DAY")
+    @classmethod
+    def validate_weekly_auto_report_day(cls, value: int) -> int:
+        if value < 0 or value > 6:
+            raise ValueError("WEEKLY_AUTO_REPORT_DAY must be between 0 and 6")
+        return value
 
 
 settings = Settings()

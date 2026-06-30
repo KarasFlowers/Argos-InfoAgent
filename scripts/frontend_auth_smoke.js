@@ -74,7 +74,7 @@ function apiKeyDialogDocument(inputValue) {
       'api-key-input': input,
       'api-key-message': message,
       'api-key-save': save,
-      'api-key-btn': button,
+      'settings-btn': button,
     })[id] || null,
     addEventListener: () => {},
   };
