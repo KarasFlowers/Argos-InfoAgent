@@ -159,6 +159,58 @@ body.is-overlay-open {
     border-color: rgba(239, 68, 68, 0.22);
 }
 
+.summary-run-status {
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    width: fit-content;
+    max-width: min(760px, calc(100vw - 2rem));
+    margin: -1.45rem auto 2rem;
+    padding: 0.5rem 0.8rem;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.4;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.summary-run-status__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: #94a3b8;
+    flex: 0 0 auto;
+}
+
+.summary-run-status__label,
+.summary-run-status__meta {
+    min-width: 0;
+}
+
+.summary-run-status__meta {
+    color: var(--text-secondary);
+    opacity: 0.78;
+}
+
+.summary-run-status.is-running .summary-run-status__dot {
+    background: #fcd34d;
+}
+
+.summary-run-status.is-done .summary-run-status__dot {
+    background: #86efac;
+}
+
+.summary-run-status.is-failed {
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.2);
+}
+
+.summary-run-status.is-failed .summary-run-status__dot {
+    background: #fca5a5;
+}
+
 .board-tab {
     background: transparent;
     border: none;

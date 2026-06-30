@@ -161,6 +161,7 @@ async def generate_summary(
     save_preference: bool = False,
     board: str | None = None,
     perspective: str = "overview",
+    lite: bool = False,
     session: AsyncSession = Depends(get_session),
 ):
     """Compatibility wrapper for older direct imports."""
@@ -171,6 +172,7 @@ async def generate_summary(
         save_preference=save_preference,
         board=board,
         perspective=perspective,
+        lite=lite,
         session=session,
     )
 

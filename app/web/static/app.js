@@ -22,6 +22,7 @@ let ragFeatureAvailable = false;
 let availablePromptTemplates = [];
 let overlayFocusStack = [];
 let apiKeySaveInFlight = false;
+let summaryRunStatusPollTimer = null;
 
 const API_KEY_STORAGE_KEY = 'argos_api_key';
 const API_KEY_HEADER = 'X-API-Key';
@@ -110,6 +111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupHistoryPanel();
     _refreshCatchupBadge();
     loadSavedState();
+    fetchSummaryRunStatus();
 
     await ragAvailabilityPromise;
     fetchSummary();
@@ -901,6 +903,7 @@ function switchBoard(slug) {
     currentBoardSlug = slug;
     localStorage.setItem('argos_board', slug);
     renderBoardTabs();
+    fetchSummaryRunStatus();
     
     // Close panels if open
     closeOverlay(document.getElementById('persona-panel'), { restoreFocus: false });
@@ -2914,6 +2917,7 @@ async function fetchSummary(force = false, date = null) {
     const params = [];
     if (force) params.push('force=true');
     if (date) params.push(`date=${encodeURIComponent(date)}`);
+    if (!force && !date) params.push('lite=true');
     if (currentBoardSlug) params.push(`board=${encodeURIComponent(currentBoardSlug)}`);
     
     if (params.length > 0) {
@@ -2926,6 +2930,104 @@ async function fetchSummary(force = false, date = null) {
             ? '正在重新生成简报...'
             : '正在刷新简报...';
     await fetchSummaryWithUrl(url, loadingMessage);
+}
+
+function _getCurrentBoardObj() {
+    if (!currentBoardSlug || !availableBoards.length) return null;
+    return availableBoards.find(b => b.slug === currentBoardSlug) || null;
+}
+
+async function fetchSummaryRunStatus() {
+    const board = _getCurrentBoardObj();
+    const container = document.getElementById('summary-run-status');
+    if (!container || !board?.id) {
+        renderSummaryRunStatus(null);
+        return null;
+    }
+
+    try {
+        const url = `/api/v1/admin/tasks?kind=summary_generation&board_id=${encodeURIComponent(board.id)}&limit=1`;
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(await readResponseError(response, '读取运行状态失败'));
+        }
+        const tasks = await response.json();
+        const latest = Array.isArray(tasks) ? tasks[0] : null;
+        renderSummaryRunStatus(latest);
+        return latest;
+    } catch (error) {
+        console.warn('Failed to fetch summary run status:', error);
+        renderSummaryRunStatus({
+            status: 'failed',
+            progress_label: '运行状态读取失败',
+            error_summary: error.message,
+        });
+        return null;
+    }
+}
+
+function renderSummaryRunStatus(task) {
+    const container = document.getElementById('summary-run-status');
+    if (!container) return;
+    if (!task) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    const status = String(task.status || 'unknown').toLowerCase();
+    const tone = ['running', 'done', 'failed'].includes(status) ? status : 'unknown';
+    const label = getSummaryRunStatusLabel(task);
+    const meta = getSummaryRunStatusMeta(task);
+
+    container.className = `summary-run-status is-${tone}`;
+    container.style.display = 'flex';
+    container.innerHTML = `
+        <span class="summary-run-status__dot" aria-hidden="true"></span>
+        <span class="summary-run-status__label">${escapeHtml(label)}</span>
+        ${meta ? `<span class="summary-run-status__meta">${escapeHtml(meta)}</span>` : ''}
+    `;
+
+    if (status === 'running') {
+        scheduleSummaryRunStatusPoll();
+    } else {
+        clearSummaryRunStatusPoll();
+    }
+}
+
+function getSummaryRunStatusLabel(task) {
+    const status = String(task?.status || '').toLowerCase();
+    const label = task?.progress_label || '';
+    if (status === 'running') return label ? `简报生成中：${label}` : '简报生成中';
+    if (status === 'done') return '最近一次简报生成完成';
+    if (status === 'failed') return `最近一次简报生成失败${task?.error_summary ? `：${task.error_summary}` : ''}`;
+    return label || '暂无简报生成记录';
+}
+
+function getSummaryRunStatusMeta(task) {
+    const status = String(task?.status || '').toLowerCase();
+    const current = Number(task?.progress_current || 0);
+    const total = Number(task?.progress_total || 0);
+    const parts = [];
+    if (total > 0 && status === 'running') {
+        parts.push(`${Math.min(current, total)}/${total}`);
+    }
+    const finishedAt = task?.finished_at || task?.started_at || '';
+    if (finishedAt) {
+        parts.push(formatDateTime(finishedAt));
+    }
+    return parts.join(' · ');
+}
+
+function scheduleSummaryRunStatusPoll() {
+    if (summaryRunStatusPollTimer) return;
+    summaryRunStatusPollTimer = window.setInterval(fetchSummaryRunStatus, 2500);
+}
+
+function clearSummaryRunStatusPoll() {
+    if (!summaryRunStatusPollTimer) return;
+    window.clearInterval(summaryRunStatusPollTimer);
+    summaryRunStatusPollTimer = null;
 }
 
 function _loadCachedSummary() {
@@ -3016,6 +3118,17 @@ async function fetchSummaryWithUrl(url, retainedContentMessage = '正在刷新�
     const hasCachedData = !!latestData;
 
     try {
+        const isForceRefresh = (() => {
+            try {
+                return new URL(url, window.location.origin).searchParams.get('force') === 'true';
+            } catch (_) {
+                return false;
+            }
+        })();
+        if (isForceRefresh) {
+            renderSummaryRunStatus({ status: 'running', progress_label: '等待服务端开始', progress_current: 0, progress_total: 4 });
+            scheduleSummaryRunStatusPoll();
+        }
         // Only show full loading spinner if we have NO cached data to show
         if (!hasCachedData) {
             showLoadingState();
@@ -3043,6 +3156,7 @@ async function fetchSummaryWithUrl(url, retainedContentMessage = '正在刷新�
 
         _renderSummaryData(data);
         _saveCachedSummary(data);
+        fetchSummaryRunStatus();
     } catch (error) {
         if (error.name === 'AbortError') return; // cancelled by newer fetch — ignore
         console.error('Failed to fetch summary:', error);
@@ -3057,6 +3171,7 @@ async function fetchSummaryWithUrl(url, retainedContentMessage = '正在刷新�
             setSummaryFeedback(`刷新简报失败：${error.message}。当前仍显示上次成功生成的内容。`, 'error');
             if (refreshBtn) refreshBtn.style.display = 'inline-flex';
         }
+        fetchSummaryRunStatus();
     }
 }
 
@@ -3779,6 +3894,9 @@ function confirmForceRefresh() {
     latestData = null;
 
     let url = '/api/v1/summary?force=true';
+    if (currentBoardSlug) {
+        url += `&board=${encodeURIComponent(currentBoardSlug)}`;
+    }
     if (preference) {
         url += `&preference=${encodeURIComponent(preference)}`;
         if (saveIt) {
@@ -3786,7 +3904,7 @@ function confirmForceRefresh() {
         }
     }
 
-    fetchSummaryWithUrl(url);
+    fetchSummaryWithUrl(url, '正在重新生成简报...');
 }
 
 function submitRefresh() {
@@ -6298,11 +6416,6 @@ async function runSilentModeNow(scope = 'all') {
         if (currentBtn) currentBtn.textContent = '运行当前板块';
         if (allBtn) allBtn.textContent = '运行全部板块';
     }
-}
-
-function _getCurrentBoardObj() {
-    if (!currentBoardSlug || !availableBoards.length) return null;
-    return availableBoards.find(b => b.slug === currentBoardSlug) || null;
 }
 
 async function loadSourcesForCurrentBoard() {

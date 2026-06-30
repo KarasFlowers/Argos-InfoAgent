@@ -17,9 +17,11 @@ Multiple times can be comma-separated to push the same board at different hours.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -147,16 +149,65 @@ async def track_task_run(kind: str, trigger_type: str = "scheduled", board_id: i
             self.progress_total = 0
             self.stage_timings = {}
             self.ai_call_breakdown = {}
+            self._active_stage = ""
+            self._stage_started_at: float | None = None
 
         async def save_progress(self) -> None:
             async with AsyncSessionLocal() as session:
                 await _persist_task_progress(session, task_id, self)
+
+        async def start_stage(
+            self,
+            label: str,
+            *,
+            current: int | None = None,
+            total: int | None = None,
+            persist: bool = True,
+        ) -> None:
+            self.finish_stage()
+            self._active_stage = label
+            self._stage_started_at = monotonic()
+            self.progress_label = label
+            if current is not None:
+                self.progress_current = current
+            if total is not None:
+                self.progress_total = total
+            if persist:
+                await self.save_progress()
+
+        def finish_stage(self) -> None:
+            if not self._active_stage or self._stage_started_at is None:
+                return
+            elapsed = max(0.0, monotonic() - self._stage_started_at)
+            self.stage_timings[self._active_stage] = round(elapsed, 3)
+            self._active_stage = ""
+            self._stage_started_at = None
+
+        async def complete_stage(
+            self,
+            label: str | None = None,
+            *,
+            current: int | None = None,
+            persist: bool = True,
+        ) -> None:
+            if label and label != self._active_stage:
+                self.finish_stage()
+                self._active_stage = label
+                self._stage_started_at = monotonic()
+            self.finish_stage()
+            if label:
+                self.progress_label = label
+            if current is not None:
+                self.progress_current = current
+            if persist:
+                await self.save_progress()
 
     ref = _TaskRef()
 
     try:
         yield ref
     except asyncio.CancelledError:
+        ref.finish_stage()
         async with AsyncSessionLocal() as session:
             await _finish_task_run(
                 session,
@@ -167,6 +218,7 @@ async def track_task_run(kind: str, trigger_type: str = "scheduled", board_id: i
             )
         raise
     except Exception as exc:
+        ref.finish_stage()
         async with AsyncSessionLocal() as session:
             await _finish_task_run(
                 session,
@@ -177,8 +229,58 @@ async def track_task_run(kind: str, trigger_type: str = "scheduled", board_id: i
             )
         raise
     else:
+        ref.finish_stage()
         async with AsyncSessionLocal() as session:
             await _finish_task_run(session, task_id, TASK_STATUS_DONE, ref=ref)
+
+
+async def produce_summary_with_task_tracking(
+    *,
+    adapter,
+    board,
+    session: AsyncSession,
+    task_ref,
+    one_time_preference: str | None = None,
+    since_hours: int = 24,
+):
+    """Call a source adapter while allowing it to report TaskRun progress."""
+    task_ref.progress_total = 4
+    await task_ref.start_stage("fetching", current=1, total=4)
+    produce_signature = inspect.signature(adapter.produce)
+    supports_task_ref = "task_ref" in produce_signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in produce_signature.parameters.values()
+    )
+    if supports_task_ref:
+        summary, content_fallback = await adapter.produce(
+            board=board,
+            session=session,
+            one_time_preference=one_time_preference,
+            since_hours=since_hours,
+            task_ref=task_ref,
+        )
+    else:
+        summary, content_fallback = await adapter.produce(
+            board=board,
+            session=session,
+            one_time_preference=one_time_preference,
+            since_hours=since_hours,
+        )
+    task_ref.finish_stage()
+    task_ref.ai_call_breakdown = _summary_generation_stats(summary)
+    return summary, content_fallback
+
+
+def _summary_generation_stats(summary) -> dict:
+    if not summary:
+        return {}
+    stats = {
+        "item_count": len(getattr(summary, "top_news", None) or []),
+        "source_stats": getattr(summary, "source_stats", None) or {},
+    }
+    recommendation_report = getattr(summary, "recommendation_report", None) or {}
+    if recommendation_report:
+        stats["recommendation_report"] = recommendation_report
+    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -461,36 +563,47 @@ async def _async_push_boards(
                 summary = existing
                 if not summary:
                     try:
-                        adapter = get_adapter(board.source_type)
-                    except UnknownSourceTypeError as error:
-                        logger.error("Skipping board '%s': %s", board.slug, error)
-                        continue
+                        async with track_task_run("summary_generation", trigger_type=trigger, board_id=board.id) as board_tr:
+                            if not settings.effective_llm_api_key:
+                                raise RuntimeError("LLM API key is not configured.")
+                            try:
+                                adapter = get_adapter(board.source_type)
+                            except UnknownSourceTypeError as error:
+                                logger.error("Skipping board '%s': %s", board.slug, error)
+                                raise RuntimeError(str(error)) from error
 
-                    try:
-                        summary, content_fallback = await adapter.produce(board=board, session=session)
-                    except Exception:
-                        logger.exception("Adapter '%s' failed for board '%s'", board.source_type, board.slug)
-                        continue
+                            summary, content_fallback = await produce_summary_with_task_tracking(
+                                adapter=adapter,
+                                board=board,
+                                session=session,
+                                task_ref=board_tr,
+                            )
+                            if not summary:
+                                raise RuntimeError("No summary produced.")
 
-                    if summary:
-                        try:
+                            await board_tr.start_stage("saving_summary", current=3, total=4)
                             await db_service.save_summary(session, summary, board_id=board.id)
-                        except Exception:
-                            logger.exception("Failed to save background summary for board '%s'", board.slug)
-                            continue
 
-                        # Enqueue URLs for background ingestion (RSS items only).
-                        if settings.RAG_ENABLED and settings.RAG_BACKGROUND_INGEST_ENABLED:
-                            from app.services.rag_service import enqueue_for_ingest
+                            await board_tr.start_stage("post_processing", current=4, total=4)
+                            # Enqueue URLs for background ingestion (RSS items only).
+                            if settings.RAG_ENABLED and settings.RAG_BACKGROUND_INGEST_ENABLED:
+                                from app.services.rag_service import enqueue_for_ingest
 
-                            article_urls = [
-                                item.original_link
-                                for item in summary.top_news
-                                if item.original_link and not item.original_link.startswith("llm://")
-                            ]
-                            if article_urls:
-                                fb = {u: content_fallback[u] for u in article_urls if u in content_fallback}
-                                enqueue_for_ingest(article_urls, fallback_contents=fb if fb else None)
+                                article_urls = [
+                                    item.original_link
+                                    for item in summary.top_news
+                                    if item.original_link and not item.original_link.startswith("llm://")
+                                ]
+                                if article_urls:
+                                    content_fallback = content_fallback or {}
+                                    fb = {u: content_fallback[u] for u in article_urls if u in content_fallback}
+                                    enqueue_for_ingest(article_urls, fallback_contents=fb if fb else None)
+                            board_tr.progress_label = "done"
+                            board_tr.progress_current = 4
+                            await board_tr.save_progress()
+                    except Exception:
+                        logger.exception("Summary generation failed for board '%s'", board.slug)
+                        continue
 
                 if summary:
                     # Determine per-board notification channels (or use global default)

@@ -55,6 +55,7 @@ class MultiSourceAdapter(SourceAdapter):
         session: AsyncSession,
         one_time_preference: str | None = None,
         since_hours: int = 24,
+        task_ref=None,
     ) -> "tuple[DailySummaryResponse | None, dict[str, str]]":
         config = board.source_config or {}
 
@@ -127,6 +128,9 @@ class MultiSourceAdapter(SourceAdapter):
         )
 
         from app.services.llm_service import llm_service
+
+        if task_ref:
+            await task_ref.start_stage("generating_summary", current=2, total=4)
 
         return await llm_service.generate_daily_summary_from_items(
             all_items,

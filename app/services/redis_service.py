@@ -10,6 +10,8 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 REDIS_FAILURE_COOLDOWN_SECONDS = 60.0
+REDIS_SOCKET_TIMEOUT_SECONDS = 0.5
+REDIS_CONNECT_TIMEOUT_SECONDS = 0.5
 
 
 class RedisService:
@@ -67,8 +69,9 @@ class RedisService:
                 self._redis = Redis.from_url(
                     settings.REDIS_URL,
                     decode_responses=True,
-                    socket_timeout=2.0,
-                    retry_on_timeout=True,
+                    socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+                    socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+                    retry_on_timeout=False,
                 )
                 await self._redis.ping()
                 self._clear_cooldown()

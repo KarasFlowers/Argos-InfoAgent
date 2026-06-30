@@ -32,6 +32,7 @@ class RSSAdapter(SourceAdapter):
         session: AsyncSession,
         one_time_preference: str | None = None,
         since_hours: int = 24,  # noqa: ARG002 — RSS has no date filter
+        task_ref=None,
     ) -> "tuple[DailySummaryResponse | None, dict[str, str]]":
         # Resolve feed list: Source table is the P0 source of truth, with
         # source_config retained as a compatibility fallback.
@@ -54,6 +55,8 @@ class RSSAdapter(SourceAdapter):
             )
 
         results = await fetch_all_feeds(feeds)
+        if task_ref:
+            await task_ref.start_stage("generating_summary", current=2, total=4)
 
         # Lazy-import llm_service to avoid circulars at module import time.
         from app.services.llm_service import llm_service
