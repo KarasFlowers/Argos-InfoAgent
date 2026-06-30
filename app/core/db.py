@@ -75,6 +75,8 @@ async def _ensure_legacy_columns(conn) -> None:
     # Board table: new columns added in refactor (perspectives, prompt_key)
     if "perspectives" not in board_columns:
         await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN perspectives VARCHAR")
+    if "template_profile" not in board_columns:
+        await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN template_profile VARCHAR")
     if "prompt_key" not in board_columns:
         await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN prompt_key TEXT NOT NULL DEFAULT 'daily_briefing'")
     # Fix any rows where prompt_key ended up as NULL
@@ -285,6 +287,25 @@ async def _migrate_json_columns(conn) -> None:
         except (_json.JSONDecodeError, TypeError):
             pass
 
+    # --- Board.template_profile ---
+    template_cols = await conn.exec_driver_sql("PRAGMA table_info(board)")
+    if "template_profile" in {row[1] for row in template_cols.fetchall()}:
+        rows = await conn.exec_driver_sql(
+            "SELECT id, template_profile FROM board WHERE template_profile IS NOT NULL AND typeof(template_profile) = 'text'"
+        )
+        for row in rows.fetchall():
+            rid, raw = row
+            try:
+                parsed = _json.loads(raw)
+                if not isinstance(parsed, dict):
+                    parsed = {}
+                await conn.exec_driver_sql(
+                    "UPDATE board SET template_profile = ? WHERE id = ?",
+                    (_json.dumps(parsed, ensure_ascii=False), rid),
+                )
+            except (_json.JSONDecodeError, TypeError):
+                pass
+
 
 async def _migrate_phase2_schema(conn) -> None:
     """
@@ -311,6 +332,8 @@ async def _migrate_phase2_schema(conn) -> None:
     col_names = {row[1] for row in cols.fetchall()}
     if "perspectives" not in col_names:
         await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN perspectives JSON")
+    if "template_profile" not in col_names:
+        await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN template_profile JSON")
     if "prompt_key" not in col_names:
         await conn.exec_driver_sql("ALTER TABLE board ADD COLUMN prompt_key TEXT NOT NULL DEFAULT 'daily_briefing'")
 

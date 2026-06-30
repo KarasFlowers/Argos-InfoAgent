@@ -51,6 +51,18 @@ class TestNormalizePlan:
         p = _norm({"search_terms": ["a", "b", "c", "d", "e", "f"]})
         assert len(p["search_terms"]) == 4
 
+    def test_keeps_template_profile_known_fields(self):
+        p = _norm(
+            {
+                "template_profile": {
+                    "goal": "筛选有用内容",
+                    "selection_rules": ["官方优先"],
+                    "unknown": "drop",
+                }
+            }
+        )
+        assert p["template_profile"] == {"goal": "筛选有用内容", "selection_rules": ["官方优先"]}
+
 
 class TestWizardPlanSources:
     @pytest.mark.anyio

@@ -41,6 +41,9 @@ class Board(SQLModel, table=True):
     perspectives: dict | None = Field(
         default=None, sa_column=Column(JSON)
     )  # e.g. {"active": ["technical", "business"]}; None = single-view mode
+    template_profile: dict | None = Field(
+        default=None, sa_column=Column(JSON)
+    )  # structured demand-processing template; None = legacy prompt-only mode
     prompt_key: str = Field(
         default="daily_briefing", sa_column=Column(Text, nullable=False, server_default="daily_briefing")
     )  # prompt template key

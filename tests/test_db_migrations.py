@@ -158,6 +158,7 @@ async def test_init_db_upgrades_legacy_sqlite_schema(isolated_db):
             "perspectives",
             "prompt_key",
             "output_language",
+            "template_profile",
         }.issubset(await _columns(conn, "board"))
         assert {"stats_json", "board_id", "perspective"}.issubset(await _columns(conn, "dailysummary"))
         assert {"board_id", "weight", "source", "last_refreshed"}.issubset(await _columns(conn, "userpersona"))
@@ -185,7 +186,7 @@ def test_alembic_revision_graph_has_single_head():
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["c9f1d2e3a4b5"]
+    assert script.get_heads() == ["d4e5f6a7b8c9"]
 
 
 def test_alembic_upgrade_head_bootstraps_empty_sqlite_database(monkeypatch, tmp_path: Path):
@@ -213,4 +214,4 @@ def test_alembic_upgrade_head_bootstraps_empty_sqlite_database(monkeypatch, tmp_
     }
     assert missing_tables == set()
     assert missing_columns == {}
-    assert version == "c9f1d2e3a4b5"
+    assert version == "d4e5f6a7b8c9"

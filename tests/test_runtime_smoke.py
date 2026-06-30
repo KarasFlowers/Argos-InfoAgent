@@ -71,3 +71,25 @@ def test_runtime_smoke_log_tail_is_bounded(tmp_path):
     log_path.write_text("x" * 5000, encoding="utf-8")
 
     assert runtime_smoke.tail_file(log_path, limit=12) == "x" * 12
+
+
+def test_temporary_runtime_dir_warns_instead_of_failing_on_cleanup_lock(monkeypatch, capsys):
+    attempts: list[str] = []
+
+    def fake_mkdtemp(prefix: str) -> str:
+        assert prefix == "argos-runtime-smoke-"
+        return "C:/tmp/argos-runtime-smoke-locked"
+
+    def fake_rmtree(path):
+        attempts.append(str(path))
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(runtime_smoke.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(runtime_smoke.shutil, "rmtree", fake_rmtree)
+    monkeypatch.setattr(runtime_smoke.time, "sleep", lambda _seconds: None)
+
+    with runtime_smoke.temporary_runtime_dir() as tmp_path:
+        assert tmp_path.name == "argos-runtime-smoke-locked"
+
+    assert len(attempts) == 5
+    assert "could not remove temporary runtime directory" in capsys.readouterr().err

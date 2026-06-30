@@ -15,6 +15,10 @@ from app.core.url_safety import get_public_url
 from app.services.board_api_service import board_supports_rss_sources, build_source_topic, serialize_source
 from app.services.db_service import db_service
 from app.services.llm_service import llm_service
+from app.services.template_matching_service import (
+    annotate_source_relevance,
+    maybe_build_builtin_clarification,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -532,7 +536,13 @@ async def discover_and_verify(plan: dict) -> dict:
     try:
         from app.services.source_insights_service import annotate_source_validation, review_source_candidates
 
-        reviewed = review_source_candidates(annotate_source_validation(pool["verified"]))
+        annotated = annotate_source_validation(pool["verified"])
+        annotated = annotate_source_relevance(
+            annotated,
+            plan.get("template_profile"),
+            extra_text=f"{plan.get('intent', '')} {' '.join(plan.get('search_terms') or [])}",
+        )
+        reviewed = review_source_candidates(annotated)
         pool["verified"] = reviewed["selected"]
         pool["source_quality_report"] = _serialize_source_quality_report(reviewed)
     except Exception:
@@ -633,6 +643,15 @@ async def _run_wizard_pipeline(messages: list[dict], context: dict | None) -> di
     ({reply, ready, config, source_validation?, feed_validation?}) so the
     frontend needs no changes.
     """
+    builtin_clarification = maybe_build_builtin_clarification(messages)
+    if builtin_clarification:
+        return {
+            "reply": builtin_clarification["question"],
+            "ready": False,
+            "config": None,
+            "clarification": builtin_clarification,
+        }
+
     # ① intent + source strategy (fast)
     plan = await llm_service.wizard_plan_sources(messages, context=context)
     if not plan.get("ready"):
@@ -640,6 +659,7 @@ async def _run_wizard_pipeline(messages: list[dict], context: dict | None) -> di
             "reply": plan.get("clarify") or "可以再具体描述一下你想要的内容吗？",
             "ready": False,
             "config": None,
+            "clarification": plan.get("clarification"),
         }
 
     # ②③ discover real sources + verify + self-correct
@@ -662,6 +682,11 @@ async def _run_wizard_pipeline(messages: list[dict], context: dict | None) -> di
             from app.services.source_insights_service import annotate_source_validation
 
             source_validation = annotate_source_validation(source_validation)
+            source_validation = annotate_source_relevance(
+                source_validation,
+                config.get("template_profile"),
+                extra_text=f"{config.get('name', '')} {config.get('system_prompt', '')}",
+            )
         except Exception:
             logger.debug("Wizard source-quality annotation skipped")
         result["source_validation"] = source_validation
@@ -689,6 +714,11 @@ async def wizard_preview(payload: WizardPreviewRequest):
         from app.services.source_insights_service import annotate_source_validation, review_source_candidates
 
         sources = annotate_source_validation(sources)
+        sources = annotate_source_relevance(
+            sources,
+            config.get("template_profile"),
+            extra_text=f"{config.get('name', '')} {config.get('system_prompt', '')}",
+        )
         quality_report = review_source_candidates(sources, min_non_risky=2)
     except Exception:
         logger.debug("Wizard source-quality annotation skipped")
@@ -836,13 +866,38 @@ async def discover_board_sources_endpoint(
     annotated = annotate_source_validation(fresh_verified)
     review = review_source_candidates(annotated, min_non_risky=2)
     limit = int(payload.limit or 6)
+    selected = review["selected"]
+    dropped = review["dropped"]
+    stats = {
+        "candidate_count": len(candidates),
+        "verified_count": len(verified),
+        "new_candidate_count": len(fresh_verified),
+        "selected_count": len(selected),
+        "discarded_count": len(dropped),
+        "skipped_existing_count": len(skipped_existing),
+        "existing_source_count": len(existing_set),
+    }
+    if annotated:
+        localized_summary = (
+            f"找到 {stats['candidate_count']} 个候选，验证通过 {stats['verified_count']} 个；"
+            f"推荐新增 {stats['selected_count']} 个，"
+            f"跳过已有 {stats['skipped_existing_count']} 个，过滤 {stats['discarded_count']} 个。"
+        )
+    else:
+        localized_summary = (
+            f"找到 {stats['candidate_count']} 个候选，但暂时没有可新增的可用 RSS 来源；"
+            f"已跳过已有 {stats['skipped_existing_count']} 个。"
+        )
     return {
         "topic": topic,
         "summary": review["summary"] if annotated else "No validated RSS candidates were found for this board yet.",
+        "localized_summary": localized_summary,
+        "stats": stats,
+        "quality_report": _serialize_source_quality_report(review, limit=limit),
         "searched_terms": discovery_plan["search_terms"],
         "homepage_hints": discovery_plan["homepage_hints"],
-        "suggestions": review["selected"][:limit],
-        "discarded_suggestions": review["dropped"][:limit],
+        "suggestions": selected[:limit],
+        "discarded_suggestions": dropped[:limit],
         "skipped_existing": skipped_existing[:limit],
         "existing_source_count": len(existing_set),
     }

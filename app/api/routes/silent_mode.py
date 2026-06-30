@@ -17,6 +17,7 @@ router = APIRouter()
 
 class SilentModeRunRequest(BaseModel):
     force: bool = Field(default=False)
+    board_slugs: list[str] | None = Field(default=None, max_length=20)
 
 
 @router.get("/silent-mode/status")
@@ -44,4 +45,4 @@ async def run_silent_mode(
     payload: SilentModeRunRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    return await run_silent_collection(session, force=payload.force)
+    return await run_silent_collection(session, force=payload.force, board_slugs=payload.board_slugs)

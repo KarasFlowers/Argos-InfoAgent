@@ -16,6 +16,56 @@ from app.services.llm.client import CircuitOpenError
 logger = logging.getLogger(__name__)
 
 
+_TEMPLATE_PROFILE_LABELS = {
+    "goal": "需求目标",
+    "audience": "目标读者",
+    "content_focus": "重点关注",
+    "source_preferences": "来源偏好",
+    "selection_rules": "筛选规则",
+    "output_requirements": "输出要求",
+    "examples": "示例偏好",
+}
+
+
+def _format_template_profile_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            rendered = _format_template_profile_value(item)
+            if rendered:
+                parts.append(rendered)
+        return "；".join(parts)
+    if isinstance(value, dict):
+        parts = []
+        for key, child in value.items():
+            rendered = _format_template_profile_value(child)
+            if rendered:
+                parts.append(f"{key}: {rendered}")
+        return "；".join(parts)
+    return str(value).strip()
+
+
+def render_template_profile_instructions(template_profile: dict | None) -> str:
+    """Render a structured demand-processing template into prompt guidance."""
+    if not isinstance(template_profile, dict) or not template_profile:
+        return ""
+
+    lines = ["## 结构化需求处理模板", "请把以下配置作为本板块的长期需求理解与内容取舍标准："]
+    for key, label in _TEMPLATE_PROFILE_LABELS.items():
+        rendered = _format_template_profile_value(template_profile.get(key))
+        if rendered:
+            lines.append(f"- {label}: {rendered}")
+
+    if len(lines) == 2:
+        return ""
+    lines.append("执行时优先满足需求目标和筛选规则；若与基础简报模板冲突，以基础 JSON 输出 schema 为准。")
+    return "\n".join(lines)
+
+
 def _repair_json(text: str) -> str:
     """Attempt lightweight JSON repair for common LLM output issues.
 
@@ -58,8 +108,16 @@ def _get_editor_prompt(board=None, *, custom_instructions: str | None = None) ->
         variables["board_name"] = board.name
         variables["board_description"] = board.description
         variables["output_language"] = board.output_language
+    instruction_parts = []
+    profile_instructions = render_template_profile_instructions(
+        getattr(board, "template_profile", None) if board else None
+    )
+    if profile_instructions:
+        instruction_parts.append(profile_instructions)
     if custom_instructions:
-        variables["custom_instructions"] = custom_instructions
+        instruction_parts.append(custom_instructions)
+    if instruction_parts:
+        variables["custom_instructions"] = "\n\n".join(instruction_parts)
     try:
         return get_prompt(prompt_key, **variables)
     except FileNotFoundError:
@@ -280,6 +338,26 @@ class SummaryMixin:
             )
             content_items = filter_result.passed
 
+        template_match_report = None
+        if board and getattr(board, "template_profile", None):
+            try:
+                from app.services.template_matching_service import apply_template_match_filter
+
+                before_template_filter = len(content_items)
+                content_items, template_match_report = apply_template_match_filter(
+                    content_items,
+                    getattr(board, "template_profile", None),
+                    extra_text=getattr(board, "system_prompt", "") or "",
+                )
+                logger.info(
+                    "Template match filter: %d -> %d items",
+                    before_template_filter,
+                    len(content_items),
+                )
+            except Exception as err:
+                logger.warning("Template match filter failed, proceeding without it: %s", err)
+                template_match_report = {"enabled": True, "error": str(err)}
+
         # ---- URL cross-source dedup + AI semantic dedup ----
         from app.services.dedup_service import (
             merge_cross_source_duplicates,
@@ -420,15 +498,23 @@ class SummaryMixin:
 
             # Map the recommendation metrics back to the response
             rec_report["final_recommended_count"] = len(top_news)
+            if template_match_report:
+                rec_report["template_match_filter"] = template_match_report
             parsed_json["recommendation_report"] = rec_report
 
             return DailySummaryResponse(**parsed_json), content_fallback
         except CircuitOpenError as error:
             logger.warning("LLM circuit breaker open, producing fallback summary: %s", error)
-            return _build_fallback_summary(high_quality), content_fallback
+            fallback = _build_fallback_summary(high_quality)
+            if template_match_report:
+                fallback.recommendation_report["template_match_filter"] = template_match_report
+            return fallback, content_fallback
         except Exception as error:
             logger.exception("Error during LLM summarization: %s", error)
-            return _build_fallback_summary(high_quality), content_fallback
+            fallback = _build_fallback_summary(high_quality)
+            if template_match_report:
+                fallback.recommendation_report["template_match_filter"] = template_match_report
+            return fallback, content_fallback
 
     async def generate_perspective_summaries(
         self,

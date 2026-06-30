@@ -60,6 +60,7 @@ async def create_board(
         schedule=payload.schedule,
         notify_channels=payload.notify_channels,
         perspectives=payload.perspectives,
+        template_profile=payload.template_profile,
         prompt_key=payload.prompt_key,
         output_language=payload.output_language,
         catchup_days=payload.catchup_days,
@@ -101,6 +102,7 @@ async def preview_board_from_payload(
         schedule=payload.schedule,
         notify_channels=payload.notify_channels,
         perspectives=payload.perspectives,
+        template_profile=payload.template_profile,
         prompt_key=payload.prompt_key,
         output_language=payload.output_language,
     )
@@ -151,6 +153,7 @@ async def render_prompt_preview(
         schedule=payload.schedule,
         notify_channels=payload.notify_channels,
         perspectives=payload.perspectives,
+        template_profile=payload.template_profile,
         prompt_key=validate_board_prompt_key_or_400(payload.prompt_key),
         output_language=payload.output_language,
     )

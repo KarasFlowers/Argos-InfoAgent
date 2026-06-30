@@ -246,6 +246,8 @@ def _rank_source_candidates(entries: list[dict]) -> list[dict]:
     return sorted(
         entries or [],
         key=lambda entry: (
+            1 if entry.get("template_relevant", True) else 0,
+            float(entry.get("relevance_score") or 50.0),
             float(entry.get("trust_score") or 0.0),
             int(entry.get("article_count") or 0),
             1 if entry.get("ok") else 0,
@@ -275,6 +277,10 @@ def review_source_candidates(entries: list[dict], *, min_non_risky: int = 3) -> 
         }
         if not entry.get("ok"):
             merged["selection_reason"] = "Dropped because source validation failed. " + reason
+            dropped.append(merged)
+        elif entry.get("template_relevant") is False:
+            mismatch = entry.get("relevance_mismatch_reason") or entry.get("relevance_reason") or "Source samples do not match the board template."
+            merged["selection_reason"] = "Dropped because it does not match the template demand. " + mismatch
             dropped.append(merged)
         elif should_drop_risky and entry.get("trust_label") == "risky":
             merged["selection_reason"] = "Dropped because safer verified sources were already available. " + reason

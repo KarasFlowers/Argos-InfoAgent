@@ -7,7 +7,9 @@ settings, then verifies health and API key behavior.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -77,6 +79,28 @@ def print_log_tail(log_path: Path) -> None:
         print(output, file=sys.stderr)
 
 
+@contextlib.contextmanager
+def temporary_runtime_dir():
+    """Create a temp dir without failing a passed smoke check on delayed Windows handles."""
+    tmp = Path(tempfile.mkdtemp(prefix="argos-runtime-smoke-"))
+    try:
+        yield tmp
+    finally:
+        for attempt in range(5):
+            try:
+                shutil.rmtree(tmp)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    print(
+                        f"Warning: could not remove temporary runtime directory {tmp}; "
+                        "a process may still be releasing SQLite files.",
+                        file=sys.stderr,
+                    )
+                    break
+                time.sleep(0.5)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a local Uvicorn smoke check for Argos.")
     parser.add_argument("--port", type=int, default=0, help="Port to bind. Default: choose a free port.")
@@ -86,8 +110,7 @@ def main() -> int:
     port = args.port or find_free_port()
     root_url = f"http://127.0.0.1:{port}"
 
-    with tempfile.TemporaryDirectory(prefix="argos-runtime-smoke-") as tmp:
-        tmp_path = Path(tmp)
+    with temporary_runtime_dir() as tmp_path:
         db_path = tmp_path / "argos.db"
         chroma_dir = tmp_path / "chroma"
 

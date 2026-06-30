@@ -39,6 +39,8 @@ class TestWizardFinalize:
             '{"reply": "已为你选好源", "config": {"slug": "ai-news", "name": "AI 资讯", '
             '"icon": "🤖", "source_type": "rss", '
             '"source_config": {"feeds": ["https://a.com/feed"]}, '
+            '"template_profile": {"goal": "筛选 AI 资讯", "selection_rules": ["官方优先"]}, '
+            '"prompt_key": "tech_deep_briefing", '
             '"system_prompt": "用中文总结每日 AI 资讯"}}'
         )
         with patch("app.services.llm.wizard.settings") as s:
@@ -46,6 +48,8 @@ class TestWizardFinalize:
             out = await mixin.wizard_finalize(PLAN, POOL)
 
         assert out["config"]["source_config"]["feeds"] == ["https://a.com/feed"]
+        assert out["config"]["template_profile"]["goal"] == "筛选 AI 资讯"
+        assert out["config"]["prompt_key"] == "tech_deep_briefing"
         assert out["config"]["system_prompt"]
 
         # The verified pool (with sample titles) must reach the LLM prompt.
