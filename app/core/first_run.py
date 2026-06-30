@@ -17,6 +17,7 @@ ENV_TEMPLATE = PROJECT_ROOT / ".env.template"
 DATA_DIRS = [
     PROJECT_ROOT / "data" / "sqlite",
     PROJECT_ROOT / "data" / "chroma",
+    PROJECT_ROOT / "data" / "weekly_reports",
     PROJECT_ROOT / "logs",
 ]
 

@@ -28,6 +28,8 @@ def test_catchup_config_save_failure_is_visible_and_reverts():
     css = INDEX_CSS.read_text(encoding="utf-8")
 
     assert 'id="catchup-config-status" class="catchup-config-status" role="status" aria-live="polite"' in html
+    assert 'id="settings-modal"' in html
+    assert 'id="catchup-auto-chk"' in html
     assert "function setCatchupConfigStatus(message, type = 'info')" in js
     assert "throw new Error(await readResponseError(resp, '读取补读设置失败'))" in js
     assert "setCatchupConfigStatus('正在保存补读设置...')" in js

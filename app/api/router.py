@@ -36,6 +36,7 @@ from app.api.routes.history import router as history_router
 from app.api.routes.insights import router as insights_router
 from app.api.routes.persona import router as persona_router
 from app.api.routes.saved import router as saved_router
+from app.api.routes.settings import router as settings_router
 from app.api.routes.silent_mode import router as silent_mode_router
 from app.api.routes.sources import check_single_feed_url, discover_feed_links, parse_feed_links
 from app.api.routes.sources import get_source_coverage_endpoint as _sources_get_source_coverage_endpoint
@@ -85,6 +86,7 @@ api_router.include_router(history_router)
 api_router.include_router(insights_router)
 api_router.include_router(persona_router)
 api_router.include_router(saved_router)
+api_router.include_router(settings_router)
 api_router.include_router(silent_mode_router)
 api_router.include_router(sources_router)
 api_router.include_router(summary_router)

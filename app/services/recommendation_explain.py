@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.schemas import DailySummaryResponse, SummaryItem
 from app.services.db_service import db_service
 
@@ -43,6 +44,9 @@ def _source_matches(candidates: list[str], source: str) -> list[str]:
 
 
 def build_assistant_questions(item: SummaryItem) -> list[str]:
+    if not settings.RAG_ENABLED:
+        return []
+
     headline = (item.headline or "这条资讯").strip()
     category = (item.category or "").strip()
     tags = [str(tag).strip().lstrip("#") for tag in item.tags or [] if str(tag).strip()]
