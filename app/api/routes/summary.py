@@ -303,6 +303,13 @@ async def generate_summary(
 
         if board_obj is None:
             raise HTTPException(status_code=500, detail="No board configured — cannot generate summary.")
+
+        if not settings.effective_llm_api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="LLM API key 未配置。请在 .env 中设置 LLM_API_KEY 或 DEEPSEEK_API_KEY 后重启服务。",
+            )
+
         try:
             adapter = get_adapter(board_obj.source_type)
         except UnknownSourceTypeError as error:
