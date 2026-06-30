@@ -11,6 +11,7 @@ Tests:
 
 import pytest
 
+from app.core.config import settings
 from app.core.logging_config import trace_id_ctx
 
 
@@ -74,11 +75,31 @@ async def test_status_endpoint_reports_private_diagnostics_without_secrets(clien
 
 
 @pytest.mark.anyio
-async def test_summary_endpoint_responds(client):
-    """Summary endpoint should return 200 (or 500 if no API key, but not crash)."""
-    response = await client.get("/api/v1/summary")
-    # Accept either 200 (cached/generated) or 500 (no API key in test env)
-    assert response.status_code in (200, 500)
+async def test_summary_endpoint_responds(client, monkeypatch):
+    """Summary endpoint should return a controlled response without hitting external LLMs."""
+    monkeypatch.setattr(settings, "LLM_API_KEY", None)
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", None)
+
+    response = await client.get("/api/v1/summary?force=true")
+
+    assert response.status_code == 503
+    assert "LLM API key 未配置" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_summary_missing_llm_key_returns_503_before_adapter(client, monkeypatch):
+    monkeypatch.setattr(settings, "LLM_API_KEY", None)
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", None)
+
+    def fail_get_adapter(source_type):
+        raise AssertionError(f"adapter should not be loaded without LLM key: {source_type}")
+
+    monkeypatch.setattr("app.services.source_adapters.get_adapter", fail_get_adapter)
+
+    response = await client.get("/api/v1/summary?force=true")
+
+    assert response.status_code == 503
+    assert "LLM API key 未配置" in response.json()["detail"]
 
 
 @pytest.mark.anyio

@@ -1,5 +1,7 @@
 import json
 import logging
+import time
+from asyncio import Lock
 
 from redis.asyncio import Redis
 
@@ -7,16 +9,33 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+REDIS_FAILURE_COOLDOWN_SECONDS = 60.0
+
 
 class RedisService:
     def __init__(self):
         self._redis: Redis | None = None
+        self._disabled_until: float = 0.0
+        self._connect_lock = Lock()
+
+    def _cooldown_active(self) -> bool:
+        return time.monotonic() < self._disabled_until
+
+    def _start_cooldown(self) -> None:
+        self._disabled_until = time.monotonic() + REDIS_FAILURE_COOLDOWN_SECONDS
+
+    def _clear_cooldown(self) -> None:
+        self._disabled_until = 0.0
 
     async def get_client(self) -> Redis | None:
+        if self._cooldown_active():
+            return None
+
         if self._redis is not None:
             # Verify existing connection is still alive
             try:
                 await self._redis.ping()
+                self._clear_cooldown()
                 return self._redis
             except Exception:
                 # Connection lost — reset and fall through to reconnect
@@ -27,19 +46,37 @@ class RedisService:
                     pass
                 self._redis = None
 
-        # Attempt (re)connection
-        try:
-            self._redis = Redis.from_url(
-                settings.REDIS_URL,
-                decode_responses=True,
-                socket_timeout=2.0,
-                retry_on_timeout=True,
-            )
-            await self._redis.ping()
-            logger.info("Successfully connected to Redis.")
-        except Exception as e:
-            logger.warning("Failed to connect to Redis at %s: %s", settings.REDIS_URL, e)
-            self._redis = None
+        async with self._connect_lock:
+            if self._cooldown_active():
+                return None
+            if self._redis is not None:
+                try:
+                    await self._redis.ping()
+                    self._clear_cooldown()
+                    return self._redis
+                except Exception:
+                    logger.info("Redis connection lost, attempting reconnect...")
+                    try:
+                        await self._redis.aclose()
+                    except Exception:
+                        pass
+                    self._redis = None
+
+            # Attempt (re)connection
+            try:
+                self._redis = Redis.from_url(
+                    settings.REDIS_URL,
+                    decode_responses=True,
+                    socket_timeout=2.0,
+                    retry_on_timeout=True,
+                )
+                await self._redis.ping()
+                self._clear_cooldown()
+                logger.info("Successfully connected to Redis.")
+            except Exception as e:
+                logger.warning("Failed to connect to Redis at %s: %s", settings.REDIS_URL, e)
+                self._redis = None
+                self._start_cooldown()
 
         return self._redis
 
@@ -81,6 +118,7 @@ class RedisService:
             except Exception:
                 pass
             self._redis = None
+        self._clear_cooldown()
 
 
 # Singleton instance
