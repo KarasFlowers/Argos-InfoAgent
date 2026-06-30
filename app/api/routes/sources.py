@@ -6,11 +6,13 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.boards import resolve_active_board
 from app.core.db import get_session
 from app.core.url_safety import get_public_url, validate_public_url
+from app.models.domain import Source
 from app.services.db_service import db_service
 
 logger = logging.getLogger(__name__)
@@ -186,3 +188,101 @@ async def get_source_coverage_endpoint(
         days=days,
         limit=limit,
     )
+
+
+@router.get("/sources/dashboard")
+async def get_sources_dashboard(
+    board: str | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Lightweight source health dashboard with template-fit review."""
+    from app.services.board_api_service import serialize_source
+    from app.services.source_insights_service import (
+        get_source_coverage_analysis,
+        score_source_quality,
+        summarize_source_risk,
+    )
+    from app.services.template_matching_service import build_source_template_health_report
+
+    board_obj = await resolve_active_board(session, board)
+    board_id = board_obj.id if board_obj else None
+    stmt = select(Source)
+    if board_id is None:
+        stmt = stmt.where(Source.board_id.is_(None))
+    else:
+        stmt = stmt.where(Source.board_id == board_id)
+    stmt = stmt.order_by(Source.id)
+    sources = list((await session.execute(stmt)).scalars().all())
+
+    template_health = await build_source_template_health_report(
+        session,
+        board_id=board_id,
+        template_profile=getattr(board_obj, "template_profile", None) if board_obj else None,
+    )
+    health_by_name = {item["source"]: item for item in template_health.get("sources", [])}
+
+    enriched = []
+    for source in sources:
+        row = serialize_source(source)
+        row.update(
+            score_source_quality(
+                url=row["url"],
+                source_type=row["source_type"],
+                credibility_override=row.get("credibility_override"),
+                health_status=row.get("health_status"),
+            )
+        )
+        source_key = source.name or source.url
+        template_row = health_by_name.get(source.name) or health_by_name.get(source.url) or health_by_name.get(source_key)
+        if template_row:
+            row["template_match_rate"] = template_row.get("match_rate")
+            row["template_avg_match_score"] = template_row.get("avg_match_score")
+            row["template_adopted_count"] = template_row.get("adopted_count")
+            row["template_low_match_examples"] = template_row.get("low_match_examples", [])
+            if str(template_row.get("recommended_action", "")).startswith("建议"):
+                row["template_recommended_action"] = template_row["recommended_action"]
+        row.update(summarize_source_risk(row))
+        if row.get("template_recommended_action"):
+            row["recommended_action"] = row["template_recommended_action"]
+            row["risk_summary"] = (
+                f"近期进入摘要的内容与模板匹配率偏低"
+                f"{'（' + str(round(row['template_match_rate'] * 100)) + '%）' if row.get('template_match_rate') is not None else ''}。"
+            )
+        enriched.append(row)
+
+    total = len(enriched)
+    healthy = sum(1 for item in enriched if item.get("health_status") == "healthy")
+    high_trust = sum(1 for item in enriched if item.get("trust_label") == "high")
+    watch = sum(1 for item in enriched if item.get("trust_label") == "watch")
+    risky = sum(1 for item in enriched if item.get("trust_label") == "risky")
+    degraded = sum(1 for item in enriched if item.get("health_status") == "degraded")
+    unhealthy = sum(1 for item in enriched if item.get("health_status") == "unhealthy")
+    at_risk = [
+        item
+        for item in enriched
+        if item.get("trust_label") in {"watch", "risky"}
+        or item.get("health_status") in {"degraded", "unhealthy"}
+        or item.get("template_recommended_action")
+    ]
+    return {
+        "summary": {
+            "total_sources": total,
+            "healthy_sources": healthy,
+            "high_trust_sources": high_trust,
+            "watch_sources": watch,
+            "risky_sources": risky,
+            "degraded_sources": degraded,
+            "unhealthy_sources": unhealthy,
+            "manual_override_sources": sum(1 for item in enriched if item.get("credibility_override")),
+            "avg_success_rate": None,
+            "avg_response_time_ms": None,
+            "template_health_status": template_health.get("status"),
+        },
+        "sources": enriched,
+        "at_risk_sources": at_risk[:6],
+        "template_health": template_health,
+        "health_timeline": [],
+        "recent_movements": [],
+        "coverage_preview": await get_source_coverage_analysis(session, board_id=board_id, days=3, limit=3),
+        "window_days": 14,
+    }

@@ -5,8 +5,32 @@ import logging
 
 from app.core.config import settings
 from app.prompts import get_prompt
+from app.services.template_matching_service import normalize_clarification
 
 logger = logging.getLogger(__name__)
+
+
+_TEMPLATE_PROFILE_KEYS = (
+    "goal",
+    "audience",
+    "content_focus",
+    "source_preferences",
+    "selection_rules",
+    "output_requirements",
+    "examples",
+)
+
+
+def _normalize_template_profile(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for key in _TEMPLATE_PROFILE_KEYS:
+        item = value.get(key)
+        if item in (None, "", [], {}):
+            continue
+        normalized[key] = item
+    return normalized
 
 
 class WizardMixin:
@@ -182,9 +206,11 @@ class WizardMixin:
         st = parsed.get("source_type")
         cand = parsed.get("candidates") if isinstance(parsed.get("candidates"), dict) else {}
         rsshub_entries = [e for e in (cand.get("rsshub") or []) if isinstance(e, dict) and e.get("platform")]
+        clarification = normalize_clarification(parsed.get("clarification"))
         return {
             "ready": bool(parsed.get("ready", False)),
             "clarify": str(parsed.get("clarify", "")).strip(),
+            "clarification": clarification,
             "intent": str(parsed.get("intent", "")).strip(),
             "source_type": st if st in valid_types else "rss",
             "slug": str(parsed.get("slug", "")).strip(),
@@ -196,6 +222,7 @@ class WizardMixin:
                 "hackernews": bool(cand.get("hackernews", False)),
                 "rsshub": rsshub_entries,
             },
+            "template_profile": _normalize_template_profile(parsed.get("template_profile")),
         }
 
     async def wizard_finalize(self, plan: dict, pool: dict) -> dict:
@@ -219,12 +246,17 @@ class WizardMixin:
                 trust_bits.append(f"评分={e.get('trust_score')}")
             if e.get("quality_summary"):
                 trust_bits.append(f"备注={e.get('quality_summary')}")
+            if e.get("relevance_label"):
+                trust_bits.append(f"需求相关性={e.get('relevance_label')}({e.get('relevance_score')})")
+            if e.get("relevance_reason"):
+                trust_bits.append(f"相关性理由={e.get('relevance_reason')}")
             trust_str = f"｜{'；'.join(trust_bits)}" if trust_bits else ""
             pool_lines.append(f"- [{e.get('source_type')}] {label}{sample_str}{trust_str}")
         pool_text = "\n".join(pool_lines) if pool_lines else "（候选池为空，没有可用的已验证源）"
 
         user_content = (
             f"用户意图：{plan.get('intent', '')}\n"
+            f"需求处理模板草案：{json.dumps(plan.get('template_profile') or {}, ensure_ascii=False)}\n"
             f"初步命名：slug={plan.get('slug', '')} name={plan.get('name', '')} "
             f"icon={plan.get('icon', '')} source_type={plan.get('source_type', '')}\n\n"
             f"已验证候选池：\n{pool_text}"
@@ -251,6 +283,15 @@ class WizardMixin:
         config = parsed.get("config") if isinstance(parsed.get("config"), dict) else None
         if config:
             valid_types = ("rss", "pure_llm", "hackernews", "reddit", "github", "multi")
+            prompt_key = str(config.get("prompt_key", "")).strip()
+            if prompt_key:
+                try:
+                    from app.prompts import is_prompt_selectable
+
+                    if not is_prompt_selectable(prompt_key):
+                        prompt_key = ""
+                except Exception:
+                    prompt_key = ""
             config = {
                 "slug": str(config.get("slug", "") or plan.get("slug", "")).strip(),
                 "name": str(config.get("name", "") or plan.get("name", "")).strip(),
@@ -259,6 +300,10 @@ class WizardMixin:
                 if config.get("source_type") in valid_types
                 else plan.get("source_type", "rss"),
                 "source_config": config.get("source_config") if isinstance(config.get("source_config"), dict) else {},
+                "template_profile": _normalize_template_profile(
+                    config.get("template_profile") or plan.get("template_profile")
+                ),
+                "prompt_key": prompt_key,
                 "system_prompt": str(config.get("system_prompt", "")).strip(),
             }
             if not config["slug"] or not config["name"]:

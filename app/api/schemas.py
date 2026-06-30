@@ -1,7 +1,18 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
-class BoardCreateRequest(BaseModel):
+class BoardTemplateProfileMixin(BaseModel):
+    template_profile: dict | None = None
+
+    @field_validator("template_profile")
+    @classmethod
+    def _template_profile_must_be_object(cls, value):
+        if value is not None and not isinstance(value, dict):
+            raise ValueError("template_profile must be an object.")
+        return value
+
+
+class BoardCreateRequest(BoardTemplateProfileMixin):
     slug: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$")
     name: str = Field(min_length=1, max_length=128)
     icon: str = Field(default="", max_length=32)
@@ -18,7 +29,7 @@ class BoardCreateRequest(BaseModel):
     catchup_days: int = Field(default=7, ge=0, le=30)
 
 
-class BoardUpdateRequest(BaseModel):
+class BoardUpdateRequest(BoardTemplateProfileMixin):
     name: str | None = Field(default=None, max_length=128)
     icon: str | None = Field(default=None, max_length=32)
     description: str | None = Field(default=None, max_length=500)
@@ -35,7 +46,7 @@ class BoardUpdateRequest(BaseModel):
     catchup_days: int | None = Field(default=None, ge=0, le=30)
 
 
-class BoardPreviewRequest(BaseModel):
+class BoardPreviewRequest(BoardTemplateProfileMixin):
     slug: str = Field(default="preview-board", min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$")
     name: str = Field(default="预览板块", min_length=1, max_length=128)
     icon: str = Field(default="📌", max_length=32)

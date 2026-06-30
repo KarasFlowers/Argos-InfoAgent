@@ -107,6 +107,10 @@ def test_board_catchup_days_column_is_integer():
     assert isinstance(Board.__table__.c.catchup_days.type, Integer)
 
 
+def test_board_template_profile_column_exists():
+    assert "template_profile" in Board.__table__.c
+
+
 def test_news_item_json_list_fields_use_default_factories():
     assert NewsItem.model_fields["key_points"].default_factory is list
     assert NewsItem.model_fields["tags"].default_factory is list
@@ -161,6 +165,23 @@ async def test_legacy_startup_adds_integer_catchup_days_column():
 
     catchup_column = next(row for row in columns if row[1] == "catchup_days")
     assert catchup_column[2].upper() == "INTEGER"
+
+
+@pytest.mark.anyio
+async def test_board_repo_persists_template_profile(isolated_session):
+    db = DBService()
+    profile = {"goal": "筛出有用内容", "selection_rules": ["官方优先"]}
+
+    board = await db.create_board(
+        isolated_session,
+        slug="template-board",
+        name="Template Board",
+        template_profile=profile,
+    )
+    loaded = await db.get_board_by_slug(isolated_session, "template-board")
+
+    assert board.template_profile == profile
+    assert loaded.template_profile == profile
 
 
 @pytest.mark.anyio

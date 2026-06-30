@@ -2,7 +2,7 @@ from main import app
 
 
 def test_system_and_insights_routes_are_registered():
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
 
     assert "/api/v1/ping" in paths
     assert "/api/v1/status" in paths
@@ -46,4 +46,5 @@ def test_system_and_insights_routes_are_registered():
     assert "/api/v1/silent-mode/run" in paths
     assert "/api/v1/sources/test" in paths
     assert "/api/v1/sources/test_all" in paths
+    assert "/api/v1/sources/dashboard" in paths
     assert "/api/v1/sources/coverage" in paths

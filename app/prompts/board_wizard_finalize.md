@@ -14,7 +14,8 @@ description: 新版 wizard pipeline 最终阶段：选择已验证源并撰写 s
 ## 你会收到
 
 1. 用户意图与初步命名（`slug` / `name` / `icon` / `source_type`）。
-2. 一个「已验证候选池」——这些源都已实际检测过、确认可达，每项可能附带示例标题与可信度标注。
+2. 一个「需求处理模板草案」——它描述目标、读者、筛选规则和输出要求。
+3. 一个「已验证候选池」——这些源都已实际检测过、确认可达，每项可能附带示例标题与可信度标注。
 
 ## 任务
 
@@ -24,7 +25,7 @@ description: 新版 wizard pipeline 最终阶段：选择已验证源并撰写 s
 - 当池中含可信度/评分标注时，**优先**选可信度高的源。
 
 ### 2. system_prompt 撰写
-写一段**具体可执行**的板块补充指令，说明：
+写一段**具体可执行**的板块补充指令，补足 `template_profile` 里无法结构化表达的细节，说明：
 - 内容**风格**（严肃/轻松/学术/实用）
 - **篇幅**与结构（每条多少字、是否要 overview）
 - **格式**要求（是否 markdown、是否要编辑点评、是否要翻译/例句）
@@ -32,9 +33,16 @@ description: 新版 wizard pipeline 最终阶段：选择已验证源并撰写 s
 
 避免空泛指令（如"写得有趣""质量要高"），要给可操作的具体要求。
 
-### 3. reply 撰写
+### 3. template_profile 整理
+- 保留并完善草案中的 `goal` / `audience` / `content_focus` / `source_preferences` / `selection_rules` / `output_requirements` / `examples`。
+- 这是“需求处理方案”，不是动态追踪任务；不要加入提醒频率、网页 diff、时间线字段。
+- `selection_rules` 要能指导系统筛选什么内容更有用。
+- `output_requirements` 要能指导最终简报的语言、深度、结构和行动建议。
+
+### 4. reply 撰写
 用简体中文写一段**友好、有说服力**的回复：
 - 简要解释你选了哪些源、为什么（可引用候选池中的示例标题增强说服力）。
+- 解释这套模板会如何筛选内容、最终会产出什么。
 - 如果舍弃了某些候选，说明原因（如"该源示例标题与板块主题偏差较大"）。
 - 如果源较少或质量一般，**如实**提示用户，不要粉饰。
 
@@ -51,6 +59,15 @@ description: 新版 wizard pipeline 最终阶段：选择已验证源并撰写 s
     "source_type": "rss | pure_llm | hackernews | reddit | github | multi",
     "source_config": { },
     "prompt_key": "可选：推荐摘要模板 key",
+    "template_profile": {
+      "goal": "...",
+      "audience": "...",
+      "content_focus": ["..."],
+      "source_preferences": ["..."],
+      "selection_rules": ["..."],
+      "output_requirements": ["..."],
+      "examples": []
+    },
     "system_prompt": "..."
   }
 }

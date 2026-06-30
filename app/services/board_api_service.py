@@ -48,6 +48,7 @@ def serialize_board(board) -> dict:
         "source_type": board.source_type,
         "source_config": board.source_config or {},
         "perspectives": board.perspectives or {},
+        "template_profile": getattr(board, "template_profile", None) or {},
         "prompt_key": board.prompt_key or "daily_briefing",
         "output_language": getattr(board, "output_language", "auto") or "auto",
         "schedule": board.schedule or "",

@@ -755,8 +755,32 @@ let wizardLastDiscoveryReport = null;
 let wizardLastPreviewData = null;
 let wizardLastPreviewError = '';
 let wizardIsLoading = false;
+let wizardLoadingTimer = null;
 let wizardTopic = '';              // derived topic for feed-fix requests
 let wizardBrokenFeeds = new Set(); // broken feed URLs not yet replaced
+
+const WIZARD_PROGRESS_STEPS = [
+    {
+        title: '理解你的需求',
+        detail: '正在提取目标、受众和内容重点。',
+    },
+    {
+        title: '拆解筛选规则',
+        detail: '正在判断哪些内容应该优先、哪些可以降低权重。',
+    },
+    {
+        title: '查找可用信息源',
+        detail: '正在寻找并验证更适合这个板块的来源。',
+    },
+    {
+        title: '整理模板配置',
+        detail: '正在组合信息源、输出结构和补充指令。',
+    },
+    {
+        title: '做最后校验',
+        detail: '马上完成，正在确认结果可保存、可编辑。',
+    },
+];
 
 function clearWizardReviewState() {
     wizardLastSourceValidation = null;
@@ -802,15 +826,38 @@ function _populatePromptDropdown() {
     const select = document.getElementById('board-prompt-key');
     if (!select || availablePromptTemplates.length === 0) return;
 
+    const previousValue = select.value || 'daily_briefing';
     select.innerHTML = '';
     for (const tpl of availablePromptTemplates) {
         const opt = document.createElement('option');
         const key = tpl.key || tpl;
         const name = tpl.name || key;
         opt.value = key;
+        opt.dataset.description = tpl.description || '';
+        opt.dataset.version = tpl.version || '';
         opt.textContent = name + (key === 'daily_briefing' ? ' (默认)' : '');
         select.appendChild(opt);
     }
+    if ([...select.options].some((opt) => opt.value === previousValue)) {
+        select.value = previousValue;
+    }
+    updatePromptTemplateDescription();
+}
+
+function updatePromptTemplateDescription() {
+    const select = document.getElementById('board-prompt-key');
+    const descriptionEl = document.getElementById('board-template-description');
+    if (!select || !descriptionEl) return;
+
+    const option = select.selectedOptions?.[0];
+    const label = option?.textContent || select.value || 'daily_briefing';
+    const description = option?.dataset.description || '通用每日简报结构，适合大多数板块。';
+    const version = option?.dataset.version ? ` · v${option.dataset.version}` : '';
+    descriptionEl.innerHTML = `
+        <span class="board-template-description__name">${escapeHtml(label)}${escapeHtml(version)}</span>
+        <span>${escapeHtml(description)}</span>
+        <button type="button" class="board-template-preview-btn" onclick="previewBoardPrompt()">预览 Prompt</button>
+    `;
 }
 
 function toggleAdvancedSettings(btn) {
@@ -824,13 +871,28 @@ function toggleAdvancedSettings(btn) {
 }
 
 const PRESET_TEMPLATES = {
-    python_dev: {
-        slug: 'python-dev',
-        name: 'Python 开发',
+    tech_trends: {
+        slug: 'tech-trends',
+        name: '技术动态',
         icon: '❖',
-        source_type: 'github',
-        source_config: { repos: [{owner: 'python', repo: 'cpython'}, {owner: 'pallets', repo: 'flask'}] },
-        system_prompt: '你是一个资深的 Python 开发者，请帮我总结这些 Python 相关的最新动态。'
+        source_type: 'multi',
+        source_config: {
+            sources: {
+                hackernews: { fetch_top_stories: 40, min_score: 120 },
+                github: { repos: [{owner: 'openai', repo: 'openai-python'}], users: [] },
+                reddit: { subreddits: [{subreddit: 'programming', sort: 'hot', min_score: 80}], fetch_comments: 5 },
+            }
+        },
+        prompt_key: 'tech_deep_briefing',
+        template_profile: {
+            goal: '筛出对工程实践和技术决策真正有用的技术动态。',
+            audience: '忙碌的开发者和技术负责人',
+            content_focus: ['重要版本发布', '开发者工具变化', '社区高质量讨论', '迁移影响'],
+            source_preferences: ['GitHub 和官方发布优先', 'HN/Reddit 用于补充社区反馈'],
+            selection_rules: ['优先保留有技术细节和实际影响的信息', '降低泛泛观点和营销稿权重'],
+            output_requirements: ['中文输出', '说明为什么重要', '给出可能的跟进行动'],
+        },
+        system_prompt: '优先筛选有工程影响、迁移成本、依赖更新或社区争议的技术动态。'
     },
     ai_research: {
         slug: 'ai-research',
@@ -838,6 +900,15 @@ const PRESET_TEMPLATES = {
         icon: '❖',
         source_type: 'hackernews',
         source_config: { fetch_top_stories: 40, min_score: 150 },
+        prompt_key: 'tech_deep_briefing',
+        template_profile: {
+            goal: '从大量 AI 相关信息中筛出值得研究和验证的新模型、论文、工具与趋势。',
+            audience: 'AI 研究者和工程实践者',
+            content_focus: ['模型能力变化', '论文和开源实现', '评测与局限', '社区复现反馈'],
+            source_preferences: ['技术博客、论文讨论和社区复现优先', '新闻稿只作背景补充'],
+            selection_rules: ['优先保留可验证、有实验或代码的信息', '降低没有细节的融资和营销新闻权重'],
+            output_requirements: ['中文输出', '突出技术价值和局限', '标注适合继续跟进的方向'],
+        },
         system_prompt: '请从 HN 热帖中筛选出与 AI、大模型、机器学习相关的论文和项目进行总结。'
     },
     indie_hacker: {
@@ -846,6 +917,15 @@ const PRESET_TEMPLATES = {
         icon: '❖',
         source_type: 'reddit',
         source_config: { subreddits: [{subreddit: 'SaaS', sort: 'hot', min_score: 50}], fetch_comments: 10 },
+        prompt_key: 'casual_briefing',
+        template_profile: {
+            goal: '提炼独立开发、SaaS 和产品增长中可以借鉴的真实经验。',
+            audience: '独立开发者和早期产品团队',
+            content_focus: ['获客经验', '定价和转化', '产品定位', '失败教训'],
+            source_preferences: ['真实社区讨论优先', '少用泛泛新闻和公关稿'],
+            selection_rules: ['优先保留有数字、过程、反思的信息', '降低鸡汤式建议权重'],
+            output_requirements: ['中文输出', '提炼可执行建议', '保留反例和风险提醒'],
+        },
         system_prompt: '关注独立开发、SaaS、产品营销相关的讨论，总结出有价值的商业洞察。'
     }
 };
@@ -881,6 +961,9 @@ function setupBoardFormExperience() {
         if (!(event.target instanceof HTMLElement)) return;
         clearBoardFormFeedback();
         syncBoardFormState({ fromInput: true });
+        if (event.target.id === 'board-prompt-key') {
+            updatePromptTemplateDescription();
+        }
         if (event.target.id !== 'board-source-type') {
             renderBoardConfigSummary();
         }
@@ -942,6 +1025,14 @@ function captureBoardFormFingerprint() {
         },
         promptKey: getBoardFieldValue('board-prompt-key', 'daily_briefing').trim(),
         outputLanguage: getBoardFieldValue('board-output-language', 'auto').trim(),
+        templateProfile: {
+            goal: getBoardFieldValue('board-template-goal').trim(),
+            audience: getBoardFieldValue('board-template-audience').trim(),
+            contentFocus: getBoardFieldValue('board-template-focus').trim(),
+            sourcePreferences: getBoardFieldValue('board-template-sources').trim(),
+            selectionRules: getBoardFieldValue('board-template-rules').trim(),
+            outputRequirements: getBoardFieldValue('board-template-output').trim(),
+        },
         prompt: getBoardFieldValue('board-prompt').trim(),
         schedule: getBoardFieldValue('board-schedule').trim(),
         notifyChannels: getBoardFieldValue('board-notify').trim(),
@@ -999,6 +1090,64 @@ function splitBoardNotifyChannels(raw) {
         .split(/[,\n，]/)
         .map((value) => value.trim())
         .filter(Boolean);
+}
+
+function buildTemplateProfileFromForm() {
+    const profile = {
+        goal: getBoardFieldValue('board-template-goal').trim(),
+        audience: getBoardFieldValue('board-template-audience').trim(),
+        content_focus: splitBoardLines(getBoardFieldValue('board-template-focus')),
+        source_preferences: splitBoardLines(getBoardFieldValue('board-template-sources')),
+        selection_rules: splitBoardLines(getBoardFieldValue('board-template-rules')),
+        output_requirements: splitBoardLines(getBoardFieldValue('board-template-output')),
+        examples: [],
+    };
+    Object.keys(profile).forEach((key) => {
+        const value = profile[key];
+        if (Array.isArray(value) && value.length === 0) delete profile[key];
+        if (typeof value === 'string' && !value.trim()) delete profile[key];
+    });
+    return profile;
+}
+
+function _templateProfileListText(value) {
+    if (Array.isArray(value)) return value.filter(Boolean).join('\n');
+    if (value && typeof value === 'object') {
+        return Object.entries(value)
+            .map(([key, child]) => `${key}: ${Array.isArray(child) ? child.join('；') : child}`)
+            .join('\n');
+    }
+    return value || '';
+}
+
+function applyTemplateProfileToForm(profile = {}) {
+    const safeProfile = profile && typeof profile === 'object' ? profile : {};
+    const setValue = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.value = value || '';
+    };
+    setValue('board-template-goal', safeProfile.goal || '');
+    setValue('board-template-audience', safeProfile.audience || '');
+    setValue('board-template-focus', _templateProfileListText(safeProfile.content_focus));
+    setValue('board-template-sources', _templateProfileListText(safeProfile.source_preferences));
+    setValue('board-template-rules', _templateProfileListText(safeProfile.selection_rules));
+    setValue('board-template-output', _templateProfileListText(safeProfile.output_requirements));
+}
+
+function summarizeTemplateProfile(profile = {}) {
+    const safeProfile = profile && typeof profile === 'object' ? profile : {};
+    const parts = [];
+    if (safeProfile.goal) parts.push(`目标：${safeProfile.goal}`);
+    if (Array.isArray(safeProfile.content_focus) && safeProfile.content_focus.length) {
+        parts.push(`重点：${safeProfile.content_focus.slice(0, 3).join('、')}`);
+    }
+    if (Array.isArray(safeProfile.selection_rules) && safeProfile.selection_rules.length) {
+        parts.push(`筛选：${safeProfile.selection_rules.slice(0, 2).join('；')}`);
+    }
+    if (Array.isArray(safeProfile.output_requirements) && safeProfile.output_requirements.length) {
+        parts.push(`输出：${safeProfile.output_requirements.slice(0, 2).join('；')}`);
+    }
+    return parts;
 }
 
 function parseBoardJson(raw, label) {
@@ -1100,6 +1249,7 @@ function buildBoardFormPayload({ forPreview = false } = {}) {
         source_config: sourceConfig,
         prompt_key: promptKey,
         output_language: outputLanguage,
+        template_profile: buildTemplateProfileFromForm(),
         schedule,
         notify_channels: notifyChannels,
         perspectives,
@@ -1152,6 +1302,8 @@ function applyBoardRecordToForm(board) {
     document.getElementById('board-prompt').value = board.system_prompt || '';
     document.getElementById('board-prompt-key').value = board.prompt_key || 'daily_briefing';
     document.getElementById('board-output-language').value = board.output_language || 'auto';
+    updatePromptTemplateDescription();
+    applyTemplateProfileToForm(board.template_profile || {});
     document.getElementById('board-schedule').value = board.schedule || '';
     document.getElementById('board-notify').value = board.notify_channels || '';
 
@@ -1204,6 +1356,8 @@ function renderBoardConfigSummary() {
     const notifyChannels = splitBoardNotifyChannels(document.getElementById('board-notify')?.value || '');
     const perspectivesRaw = document.getElementById('board-perspectives')?.value || '';
     const perspectivesParsed = parseBoardJson(perspectivesRaw, '多视角配置');
+    const templateProfile = buildTemplateProfileFromForm();
+    const templateSummary = summarizeTemplateProfile(templateProfile);
 
     switch (type) {
         case 'rss': {
@@ -1304,6 +1458,12 @@ function renderBoardConfigSummary() {
     if (promptRaw) {
         checklist.push(`已添加板块补充指令（${promptRaw.length} 字）。`);
     }
+    if (templateSummary.length > 0) {
+        checklist.unshift(...templateSummary.slice(0, 3));
+        notes.push('模板配置会作为长期需求处理方案影响筛选和输出。');
+    } else {
+        notes.push('建议补充模板配置，让系统更明确该保留什么、弱化什么。');
+    }
     if (scheduleRaw) {
         checklist.push(`已设置单独调度：${scheduleRaw}。`);
     }
@@ -1372,6 +1532,7 @@ function resetWizard() {
     wizardMessages = [];
     wizardLastConfig = null;
     clearWizardReviewState();
+    clearWizardProgressMessage();
     wizardIsLoading = false;
     wizardTopic = '';
     const messagesDiv = document.getElementById('wizard-messages');
@@ -1397,6 +1558,99 @@ function appendWizardMsg(role, content) {
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
     return div;
+}
+
+function submitWizardClarification(value) {
+    const input = document.getElementById('wizard-input');
+    if (!input) return;
+    input.value = value || '';
+    const form = document.getElementById('wizard-form');
+    if (form) {
+        form.requestSubmit ? form.requestSubmit() : submitWizard(new Event('submit'));
+    }
+}
+
+function renderWizardClarification(clarification) {
+    if (!clarification || !Array.isArray(clarification.options) || clarification.options.length === 0) return;
+    const container = document.getElementById('wizard-messages');
+    if (!container) return;
+    const card = document.createElement('div');
+    card.className = 'wizard-msg wizard-msg--ai wizard-clarification-card';
+
+    const title = document.createElement('div');
+    title.className = 'wizard-feed-title';
+    title.textContent = clarification.question || '我需要先确认一个关键偏好';
+    card.appendChild(title);
+
+    const options = document.createElement('div');
+    options.className = 'wizard-clarification-options';
+    clarification.options.slice(0, 6).forEach((option) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'wizard-clarification-option';
+        btn.dataset.value = option.value || option.label || '';
+        btn.innerHTML = `
+            <span class="wizard-clarification-option__label">${escapeHtml(option.label || option.value || '选项')}</span>
+            ${option.description ? `<span class="wizard-clarification-option__desc">${escapeHtml(option.description)}</span>` : ''}
+        `;
+        btn.addEventListener('click', () => submitWizardClarification(btn.dataset.value || ''));
+        options.appendChild(btn);
+    });
+    card.appendChild(options);
+
+    if (clarification.allow_custom !== false) {
+        const hint = document.createElement('div');
+        hint.className = 'wizard-feed-note';
+        hint.textContent = '也可以直接在输入框里写你的自定义标准。';
+        card.appendChild(hint);
+    }
+
+    container.appendChild(card);
+    container.scrollTop = container.scrollHeight;
+}
+
+function clearWizardProgressMessage() {
+    if (wizardLoadingTimer) {
+        clearInterval(wizardLoadingTimer);
+        wizardLoadingTimer = null;
+    }
+}
+
+function startWizardProgressMessage(messageEl) {
+    if (!messageEl) return;
+
+    clearWizardProgressMessage();
+    let stepIndex = 0;
+    messageEl.classList.add('wizard-msg--progress');
+    messageEl.setAttribute('role', 'status');
+    messageEl.setAttribute('aria-live', 'polite');
+
+    const renderStep = () => {
+        const step = WIZARD_PROGRESS_STEPS[Math.min(stepIndex, WIZARD_PROGRESS_STEPS.length - 1)];
+        messageEl.innerHTML = `
+            <div class="wizard-progress">
+                <span class="wizard-progress__spinner" aria-hidden="true"></span>
+                <div>
+                    <div class="wizard-progress__title">${escapeHtml(step.title)}</div>
+                    <div class="wizard-progress__detail">${escapeHtml(step.detail)}</div>
+                </div>
+            </div>
+        `;
+        const container = document.getElementById('wizard-messages');
+        if (container) container.scrollTop = container.scrollHeight;
+    };
+
+    renderStep();
+    wizardLoadingTimer = setInterval(() => {
+        if (!messageEl.isConnected) {
+            clearWizardProgressMessage();
+            return;
+        }
+        if (stepIndex < WIZARD_PROGRESS_STEPS.length - 1) {
+            stepIndex += 1;
+        }
+        renderStep();
+    }, 2600);
 }
 
 function getWizardSourceTypeLabel(sourceType) {
@@ -1426,6 +1680,8 @@ function renderWizardReviewPanel() {
     }
 
     const cfg = wizardLastConfig;
+    const templateProfile = cfg.template_profile || {};
+    const templateSummary = summarizeTemplateProfile(templateProfile);
     const validation = Array.isArray(wizardLastSourceValidation) ? wizardLastSourceValidation : [];
     const discovery = wizardLastDiscoveryReport || {};
     const preview = wizardLastPreviewData;
@@ -1462,8 +1718,19 @@ function renderWizardReviewPanel() {
                     <span class="wizard-review-chip">${escapeHtml(String(okSources.length))} 个可用源</span>
                     <span class="wizard-review-chip">${escapeHtml(String(failedSources.length))} 个失败源</span>
                     ${discovery.safe_count != null ? `<span class="wizard-review-chip">${escapeHtml(String(discovery.safe_count))} 个非 risky 候选</span>` : ''}
+                    ${validation.some(item => item.relevance_label) ? `<span class="wizard-review-chip">${escapeHtml(String(validation.filter(item => item.template_relevant !== false).length))} 个需求匹配源</span>` : ''}
                 </div>
             </div>
+
+            <section class="wizard-review-section">
+                <div class="wizard-review-section__title">需求处理方案</div>
+                <p class="wizard-review-section__summary">${escapeHtml(templateProfile.goal || '已根据你的描述生成结构化模板配置。')}</p>
+                ${templateSummary.length ? `
+                    <div class="wizard-review-issues">
+                        ${templateSummary.slice(0, 5).map(item => `<div class="wizard-review-issue">${escapeHtml(item)}</div>`).join('')}
+                    </div>
+                ` : '<p class="wizard-review-empty">这次建议还没有结构化模板配置，可应用后手动补充。</p>'}
+            </section>
 
             <div class="wizard-review-grid">
                 <section class="wizard-review-section">
@@ -1475,9 +1742,9 @@ function renderWizardReviewPanel() {
                                 <div class="wizard-review-source-item is-ok">
                                     <div class="wizard-review-source-item__top">
                                         <span class="wizard-review-source-item__name">${escapeHtml(item.feed_title || item.label || item.url || '候选源')}</span>
-                                        <span class="wizard-review-source-item__meta">${escapeHtml(item.trust_label || 'unknown')} trust${item.trust_score != null ? ` ${escapeHtml(String(item.trust_score))}` : ''}</span>
+                                        <span class="wizard-review-source-item__meta">${escapeHtml(item.trust_label || 'unknown')} trust${item.trust_score != null ? ` ${escapeHtml(String(item.trust_score))}` : ''}${item.relevance_label ? ` · ${escapeHtml(item.relevance_label)} fit${item.relevance_score != null ? ` ${escapeHtml(String(item.relevance_score))}` : ''}` : ''}</span>
                                     </div>
-                                    <div class="wizard-review-source-item__sub">${escapeHtml(item.selection_reason || item.quality_summary || '已纳入推荐配置。')}</div>
+                                    <div class="wizard-review-source-item__sub">${escapeHtml(item.selection_reason || item.relevance_reason || item.quality_summary || '已纳入推荐配置。')}</div>
                                 </div>
                             `).join('')}
                         </div>
@@ -1492,9 +1759,9 @@ function renderWizardReviewPanel() {
                             <div class="wizard-review-source-item ${item.ok ? 'is-ok' : 'is-fail'}">
                                 <div class="wizard-review-source-item__top">
                                     <span class="wizard-review-source-item__name">${escapeHtml(item.label || item.url || '数据源')}</span>
-                                    <span class="wizard-review-source-item__meta">${item.ok ? '可用' : '失败'}${item.trust_label ? ` · ${escapeHtml(item.trust_label)} trust` : ''}</span>
+                                    <span class="wizard-review-source-item__meta">${item.ok ? '可用' : '失败'}${item.trust_label ? ` · ${escapeHtml(item.trust_label)} trust` : ''}${item.relevance_label ? ` · ${escapeHtml(item.relevance_label)} fit` : ''}</span>
                                 </div>
-                                <div class="wizard-review-source-item__sub">${escapeHtml(item.ok ? (item.quality_summary || `${item.article_count || 0} 篇样本`) : (item.error || '验证失败'))}</div>
+                                <div class="wizard-review-source-item__sub">${escapeHtml(item.ok ? (item.relevance_reason || item.quality_summary || `${item.article_count || 0} 篇样本`) : (item.error || '验证失败'))}</div>
                             </div>
                         `).join('') : '<p class="wizard-review-empty">还没有验证数据。</p>'}
                     </div>
@@ -1569,6 +1836,7 @@ async function submitWizard(event) {
     btn.disabled = true;
     btn.textContent = '思考中...';
     const loadingMsg = appendWizardMsg('ai', '🧠 正在为你设计板块...');
+    startWizardProgressMessage(loadingMsg);
 
     try {
         const payload = { messages: wizardMessages };
@@ -1588,6 +1856,7 @@ async function submitWizard(event) {
         const data = await res.json();
 
         // Remove loading placeholder
+        clearWizardProgressMessage();
         loadingMsg.remove();
 
         // Show AI reply
@@ -1641,12 +1910,17 @@ ${sourceDetail}`;
         } else {
             wizardLastConfig = null;
             clearWizardReviewState();
+            if (data.clarification) {
+                renderWizardClarification(data.clarification);
+            }
             renderWizardReviewPanel();
         }
     } catch (e) {
+        clearWizardProgressMessage();
         loadingMsg.remove();
         appendWizardMsg('ai', `❌ 出错了：${e.message}`);
     } finally {
+        clearWizardProgressMessage();
         wizardIsLoading = false;
         btn.disabled = false;
         btn.textContent = '发送';
@@ -1696,13 +1970,14 @@ function renderWizardSourceStatus(validation) {
         const metaEl = document.createElement('span');
         metaEl.className = 'wizard-feed-meta';
         const trustText = v?.trust_label ? ` · ${v.trust_label} trust${v.trust_score != null ? ` ${v.trust_score}` : ''}` : '';
-        metaEl.textContent = `${meta}${trustText}`;
+        const fitText = v?.relevance_label ? ` · ${v.relevance_label} fit${v.relevance_score != null ? ` ${v.relevance_score}` : ''}` : '';
+        metaEl.textContent = `${meta}${trustText}${fitText}`;
         
         row.append(iconEl, typeEl, urlEl, metaEl);
-        if (v?.quality_summary) {
+        if (v?.quality_summary || v?.relevance_reason) {
             const noteEl = document.createElement('div');
             noteEl.className = 'wizard-feed-note';
-            noteEl.textContent = v.quality_summary;
+            noteEl.textContent = v.relevance_reason || v.quality_summary;
             card.appendChild(row);
             card.appendChild(noteEl);
             return;
@@ -1748,7 +2023,7 @@ function renderWizardDiscoveryReport(report) {
             row.innerHTML = `
                 <span class="wizard-feed-icon">✓</span>
                 <span class="wizard-feed-url">${escapeHtml(entry.label || entry.url || entry.source_type || '候选源')}</span>
-                <span class="wizard-feed-meta">${escapeHtml(entry.trust_label || 'unknown')} trust${entry.trust_score != null ? ` ${escapeHtml(String(entry.trust_score))}` : ''}</span>
+                <span class="wizard-feed-meta">${escapeHtml(entry.trust_label || 'unknown')} trust${entry.trust_score != null ? ` ${escapeHtml(String(entry.trust_score))}` : ''}${entry.relevance_label ? ` · ${escapeHtml(entry.relevance_label)} fit` : ''}</span>
             `;
             card.appendChild(row);
         });
@@ -1769,14 +2044,14 @@ function renderWizardDiscoveryReport(report) {
             row.innerHTML = `
                 <span class="wizard-feed-icon">✗</span>
                 <span class="wizard-feed-url">${escapeHtml(entry.label || entry.url || entry.source_type || '候选源')}</span>
-                <span class="wizard-feed-meta">${escapeHtml(entry.trust_label || 'risky')} trust${entry.trust_score != null ? ` ${escapeHtml(String(entry.trust_score))}` : ''}</span>
+                <span class="wizard-feed-meta">${escapeHtml(entry.trust_label || 'risky')} trust${entry.trust_score != null ? ` ${escapeHtml(String(entry.trust_score))}` : ''}${entry.relevance_label ? ` · ${escapeHtml(entry.relevance_label)} fit` : ''}</span>
             `;
             card.appendChild(row);
 
-            if (entry.selection_reason) {
+            if (entry.selection_reason || entry.relevance_reason) {
                 const note = document.createElement('div');
                 note.className = 'wizard-feed-note';
-                note.textContent = entry.selection_reason;
+                note.textContent = entry.selection_reason || entry.relevance_reason;
                 card.appendChild(note);
             }
         });
@@ -2001,6 +2276,11 @@ function applyWizardConfig() {
     document.getElementById('board-icon').value = cfg.icon || '❖';
     document.getElementById('board-source-type').value = cfg.source_type || 'rss';
     document.getElementById('board-prompt').value = cfg.system_prompt || '';
+    applyTemplateProfileToForm(cfg.template_profile || {});
+    if (cfg.prompt_key) {
+        document.getElementById('board-prompt-key').value = cfg.prompt_key;
+        updatePromptTemplateDescription();
+    }
     
     if (cfg.schedule) document.getElementById('board-schedule').value = cfg.schedule;
     if (cfg.notify_channels) document.getElementById('board-notify').value = cfg.notify_channels;
@@ -2117,6 +2397,9 @@ function openBoardModal(slug = null) {
         modeTabs.style.display = 'flex';
         document.getElementById('board-slug').disabled = false;
         document.getElementById('board-source-type').value = 'rss';
+        document.getElementById('board-prompt-key').value = 'daily_briefing';
+        document.getElementById('board-output-language').value = 'auto';
+        updatePromptTemplateDescription();
         toggleBoardSourceConfig();
         switchBoardMode('wizard');
         resetBoardFormState({ hasSavedVersion: false });
@@ -2405,7 +2688,9 @@ async function previewBoardPrompt() {
     if (!container) return;
 
     container.style.display = 'block';
-    container.innerHTML = '<span style="color:var(--text-secondary);font-size:0.8rem;">正在渲染最终 Prompt...</span>';
+    container.className = 'board-prompt-preview is-loading';
+    container.innerHTML = '<span>正在渲染最终 Prompt...</span>';
+    container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
     try {
         const res = await fetch('/api/v1/boards/prompts/render', {
@@ -2418,28 +2703,31 @@ async function previewBoardPrompt() {
         }
         const data = await res.json();
 
-        let html = '<div style="font-size:0.75rem;line-height:1.5;max-height:400px;overflow-y:auto;background:var(--bg-secondary);border-radius:6px;padding:0.75rem;margin-top:0.4rem;font-family:monospace;white-space:pre-wrap;word-break:break-word;">';
-        html += '<div style="margin-bottom:0.5rem;color:var(--accent-color);font-weight:600;">System Prompt</div>';
-        html += `<div style="margin-bottom:1rem;">${escapeHtml((data.messages || [])[0]?.content || '(empty)')}</div>`;
-        html += '<div style="margin-bottom:0.5rem;color:var(--accent-color);font-weight:600;">User Message (template)</div>';
-        html += `<div>${escapeHtml((data.messages || [])[1]?.content || '(empty)')}</div>`;
+        let html = '<div class="board-prompt-preview__body">';
+        html += '<div class="board-prompt-preview__label">System Prompt</div>';
+        html += `<div class="board-prompt-preview__block">${escapeHtml((data.messages || [])[0]?.content || '(empty)')}</div>`;
+        html += '<div class="board-prompt-preview__label">User Message (template)</div>';
+        html += `<div class="board-prompt-preview__block">${escapeHtml((data.messages || [])[1]?.content || '(empty)')}</div>`;
         html += '</div>';
 
         const meta = [];
         if (data.template?.key) meta.push(`模板: ${escapeHtml(data.template.key)}`);
         if (data.template?.version) meta.push(`v${escapeHtml(data.template.version)}`);
         meta.push(`约 ${data.estimated_chars || 0} 字符`);
-        html += `<div style="font-size:0.7rem;color:var(--text-secondary);margin-top:0.3rem;">${meta.join(' · ')}</div>`;
+        html += `<div class="board-prompt-preview__meta">${meta.join(' · ')}</div>`;
 
         if (data.warnings && data.warnings.length > 0) {
-            html += '<div style="font-size:0.75rem;color:#e6a23c;margin-top:0.4rem;">';
-            data.warnings.forEach(w => { html += `⚠ ${escapeHtml(w)}<br>`; });
+            html += '<div class="board-prompt-preview__warning">';
+            data.warnings.forEach(w => { html += `${escapeHtml(w)}<br>`; });
             html += '</div>';
         }
 
+        container.className = 'board-prompt-preview';
         container.innerHTML = html;
+        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) {
-        container.innerHTML = `<span style="color:#f56c6c;font-size:0.8rem;">预览失败：${escapeHtml(e.message)}</span>`;
+        container.className = 'board-prompt-preview is-error';
+        container.innerHTML = `<span>预览失败：${escapeHtml(e.message)}</span>`;
     }
 }
 
@@ -5513,23 +5801,36 @@ async function refreshSilentModeStatus() {
     }
 }
 
-async function runSilentModeNow() {
+async function runSilentModeNow(scope = 'all') {
     const resultEl = document.getElementById('silent-mode-result');
-    const runBtn = document.querySelector('.sources-silent-mode-actions .sources-add-btn');
+    const runBtn = document.getElementById(scope === 'current' ? 'silent-mode-run-current' : 'silent-mode-run-all');
+    const allRunButtons = document.querySelectorAll('#silent-mode-run-current, #silent-mode-run-all');
     if (!resultEl) return;
+    const currentBoard = _getCurrentBoardObj();
+    const useCurrentBoard = scope === 'current';
+    if (useCurrentBoard && !currentBoard?.slug) {
+        resultEl.style.display = 'block';
+        resultEl.className = 'sources-silent-mode-result is-error';
+        resultEl.textContent = '请先选择一个板块，再运行当前板块。';
+        return;
+    }
+    const payload = { force: true };
+    if (useCurrentBoard) {
+        payload.board_slugs = [currentBoard.slug];
+    }
     resultEl.style.display = 'block';
     resultEl.className = 'sources-silent-mode-result';
-    resultEl.textContent = '正在执行静默采集...';
-    if (runBtn) {
-        runBtn.disabled = true;
-        runBtn.textContent = '运行中...';
-    }
+    resultEl.textContent = useCurrentBoard
+        ? `正在为「${currentBoard.name || currentBoard.slug}」执行静默采集...`
+        : '正在为全部启用板块执行静默采集...';
+    allRunButtons.forEach((button) => { button.disabled = true; });
+    if (runBtn) runBtn.textContent = '运行中...';
 
     try {
         const res = await fetch('/api/v1/silent-mode/run', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ force: true }),
+            body: JSON.stringify(payload),
         });
         if (!res.ok) throw new Error(await readResponseError(res, '静默模式运行失败'));
         const data = await res.json();
@@ -5538,7 +5839,7 @@ async function runSilentModeNow() {
             lines.push(`状态：${data.reason}`);
         }
         if (Array.isArray(data.results) && data.results.length > 0) {
-            lines.push(`已处理 ${data.results.length} 个板块。`);
+            lines.push(`已处理 ${data.results.length} 个板块。${useCurrentBoard ? '本次只运行当前板块。' : ''}`);
             data.results.slice(0, 3).forEach((item) => {
                 const bits = [item.board || '未知板块', item.status || 'unknown'];
                 if (Number.isFinite(item.article_count)) bits.push(`${item.article_count} 篇`);
@@ -5558,10 +5859,11 @@ async function runSilentModeNow() {
         resultEl.className = 'sources-silent-mode-result is-error';
         resultEl.textContent = `运行失败：${error.message}`;
     } finally {
-        if (runBtn) {
-            runBtn.disabled = false;
-            runBtn.textContent = '立即运行';
-        }
+        allRunButtons.forEach((button) => { button.disabled = false; });
+        const currentBtn = document.getElementById('silent-mode-run-current');
+        const allBtn = document.getElementById('silent-mode-run-all');
+        if (currentBtn) currentBtn.textContent = '运行当前板块';
+        if (allBtn) allBtn.textContent = '运行全部板块';
     }
 }
 
@@ -5983,7 +6285,8 @@ function renderFeedList(sources, container) {
         const articleCount = source.recent_article_count != null ? `${source.recent_article_count} 篇` : '0 篇';
         const eventCount = source.recent_event_count != null ? `${source.recent_event_count} 事件` : '0 事件';
         const successRate = source.success_rate != null ? `${Math.round(source.success_rate * 100)}% 成功` : '暂无检查';
-        metaText.textContent = `${articleCount} · ${eventCount} · ${successRate}`;
+        const fitRate = source.template_match_rate != null ? ` · ${Math.round(source.template_match_rate * 100)}% 匹配模板` : '';
+        metaText.textContent = `${articleCount} · ${eventCount} · ${successRate}${fitRate}`;
         metaRow.appendChild(metaText);
 
         const controlRow = document.createElement('div');
@@ -6016,6 +6319,12 @@ function renderFeedList(sources, container) {
 
         main.appendChild(urlEl);
         main.appendChild(metaRow);
+        if (source.template_recommended_action) {
+            const fitNote = document.createElement('div');
+            fitNote.className = 'source-feed-note';
+            fitNote.textContent = source.template_recommended_action;
+            main.appendChild(fitNote);
+        }
         main.appendChild(controlRow);
         if (Array.isArray(source.recent_statuses) && source.recent_statuses.length > 0) {
             const trendRow = document.createElement('div');
@@ -6156,16 +6465,31 @@ function renderDiscoveredSources(data) {
     const skipped = data?.skipped_existing || [];
     const topic = data?.topic || '当前板块主题';
     const searchedTerms = Array.isArray(data?.searched_terms) ? data.searched_terms : [];
+    const stats = data?.stats || {};
+    const statItems = [
+        ['候选', stats.candidate_count],
+        ['验证通过', stats.verified_count],
+        ['推荐新增', stats.selected_count ?? suggestions.length],
+        ['已存在', stats.skipped_existing_count ?? skipped.length],
+        ['已过滤', stats.discarded_count ?? discarded.length],
+    ].filter(([, value]) => Number.isFinite(Number(value)));
 
     panel.style.display = 'block';
     panel.innerHTML = `
         <div class="sources-discovery-head">
             <div>
                 <div class="sources-risk-head">发现结果</div>
-                <p class="sources-discovery-summary">${escapeHtml(data?.summary || '已完成来源发现。')}</p>
+                <p class="sources-discovery-summary">${escapeHtml(data?.localized_summary || data?.summary || '已完成来源发现。')}</p>
                 <p class="sources-discovery-meta">${escapeHtml(topic)}${searchedTerms.length ? ` · 检索词：${escapeHtml(searchedTerms.slice(0, 3).join('、'))}` : ''}</p>
             </div>
         </div>
+        ${statItems.length ? `
+            <div class="sources-discovery-stats">
+                ${statItems.map(([label, value]) => `
+                    <span><strong>${escapeHtml(String(value))}</strong>${escapeHtml(label)}</span>
+                `).join('')}
+            </div>
+        ` : ''}
         ${suggestions.length ? `
             <div class="sources-discovery-list">
                 ${suggestions.map(item => `

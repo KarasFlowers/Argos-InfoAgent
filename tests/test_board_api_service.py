@@ -24,6 +24,7 @@ def test_serialize_board_normalizes_defaults():
         source_type="rss",
         source_config=None,
         perspectives=None,
+        template_profile=None,
         prompt_key="",
         output_language="",
         schedule=None,
@@ -38,6 +39,7 @@ def test_serialize_board_normalizes_defaults():
 
     assert payload["source_config"] == {}
     assert payload["perspectives"] == {}
+    assert payload["template_profile"] == {}
     assert payload["prompt_key"] == "daily_briefing"
     assert payload["output_language"] == "auto"
     assert payload["catchup_days"] == 0

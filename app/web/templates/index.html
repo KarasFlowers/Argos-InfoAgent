@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/index.css?v=50">
+    <link rel="stylesheet" href="/static/index.css?v=51">
     <script>
         // Apply theme before first paint to avoid flash of dark background
         try {
@@ -295,7 +295,8 @@
                         <div class="sources-silent-mode-meta" id="silent-mode-meta"></div>
                         <div class="sources-silent-mode-actions">
                             <button type="button" class="sources-test-btn" onclick="refreshSilentModeStatus()">刷新状态</button>
-                            <button type="button" class="sources-add-btn" onclick="runSilentModeNow()">立即运行</button>
+                            <button type="button" id="silent-mode-run-current" class="sources-test-btn" onclick="runSilentModeNow('current')">运行当前板块</button>
+                            <button type="button" id="silent-mode-run-all" class="sources-add-btn" onclick="runSilentModeNow('all')">运行全部板块</button>
                         </div>
                         <div id="silent-mode-result" class="sources-silent-mode-result" style="display:none;"></div>
                         <div id="silent-mode-history" class="sources-silent-mode-history"></div>
@@ -531,15 +532,15 @@
             <!-- AI Wizard Panel -->
             <div id="board-wizard-panel" class="board-wizard-panel">
                 <div class="wizard-presets" style="margin-bottom: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <span style="font-size: 0.85rem; color: var(--text-secondary); line-height: 24px;">快捷模板:</span>
-                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('python_dev')">Python 开发</button>
+                    <span style="font-size: 0.85rem; color: var(--text-secondary); line-height: 24px;">需求模板示例:</span>
+                    <button type="button" class="preset-tag" onclick="applyPresetTemplate('tech_trends')">技术动态</button>
                     <button type="button" class="preset-tag" onclick="applyPresetTemplate('ai_research')">AI 研究</button>
                     <button type="button" class="preset-tag" onclick="applyPresetTemplate('indie_hacker')">独立开发者</button>
                 </div>
                 <div id="wizard-messages" class="wizard-messages">
                     <div class="wizard-msg wizard-msg--ai">告诉我你想要一个什么样的板块，比如：<br>"我想每天学 5 个英语商务单词"，<br>"汇总国内外顶级 AI 实验室的最新论文"，<br>"每天给我一条冷门心理学知识"...</div>
                 </div>
-                <form class="wizard-input-row" onsubmit="submitWizard(event)">
+                <form id="wizard-form" class="wizard-input-row" onsubmit="submitWizard(event)">
                     <input id="wizard-input" type="text" placeholder="描述你的需求..." autocomplete="off">
                     <button type="submit" id="wizard-submit-btn" class="primary-btn">发送</button>
                     <button type="button" class="secondary-btn" onclick="closeBoardModal()">取消</button>
@@ -587,6 +588,58 @@
                                 <option value="multi">混合数据源</option>
                             </select>
                         </div>
+                    </div>
+                    <div class="board-template-panel">
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label>简报模板 <small>决定输出结构</small></label>
+                                <select id="board-prompt-key">
+                                    <option value="daily_briefing">daily_briefing (默认)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>输出语言 <small>可选</small></label>
+                                <select id="board-output-language">
+                                    <option value="auto">自动 (跟随源文)</option>
+                                    <option value="zh">中文</option>
+                                    <option value="en">English</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="board-template-description" class="board-template-description" aria-live="polite"></div>
+                        <div id="board-prompt-preview" class="board-prompt-preview" style="display:none;"></div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h4><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg> 模板配置</h4>
+                    <div class="form-group">
+                        <label>需求目标 <small>这个板块要帮你解决什么</small></label>
+                        <input type="text" id="board-template-goal" placeholder="例如：帮我筛出对产品和工程决策有价值的 AI 动态">
+                    </div>
+                    <div class="form-group-row">
+                        <div class="form-group">
+                            <label>目标读者 <small>可选</small></label>
+                            <input type="text" id="board-template-audience" placeholder="例如：忙碌的开发者 / 独立开发者 / 研究者">
+                        </div>
+                        <div class="form-group">
+                            <label>输出要求 <small>每行一个</small></label>
+                            <textarea id="board-template-output" placeholder="中文输出&#10;每条说明为什么重要&#10;给出下一步建议" style="height: 74px;"></textarea>
+                        </div>
+                    </div>
+                    <div class="form-group-row">
+                        <div class="form-group">
+                            <label>关注重点 <small>每行一个</small></label>
+                            <textarea id="board-template-focus" placeholder="模型发布&#10;API/SDK 变化&#10;真实用户反馈" style="height: 82px;"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>来源偏好 <small>每行一个</small></label>
+                            <textarea id="board-template-sources" placeholder="官方文档和博客优先&#10;社区讨论作为补充&#10;过滤转载聚合源" style="height: 82px;"></textarea>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>筛选规则 <small>每行一个</small></label>
+                        <textarea id="board-template-rules" placeholder="优先保留有版本号、参数、价格、迁移影响的信息&#10;降低纯观点文章权重&#10;排除泛泛的营销稿" style="height: 82px;"></textarea>
                     </div>
                 </div>
 
@@ -676,28 +729,10 @@
                 <div id="board-advanced-settings" class="board-advanced-settings" style="display:none;">
                     <div class="form-section">
                         <h4><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> 深入定制</h4>
-                        <div class="form-group-row">
-                            <div class="form-group">
-                                <label>提示词模板 (Prompt Key) <small>预设模板</small></label>
-                                <select id="board-prompt-key">
-                                    <option value="daily_briefing">daily_briefing (默认)</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>输出语言 <small>简报/周报</small></label>
-                                <select id="board-output-language">
-                                    <option value="auto">自动 (跟随源文)</option>
-                                    <option value="zh">中文</option>
-                                    <option value="en">English</option>
-                                </select>
-                            </div>
-                        </div>
-
                         <div class="form-group">
                             <label>板块补充指令 <small>注入到所选模板中，不再覆盖模板结构</small></label>
                             <textarea id="board-prompt" placeholder="补充要求，如：多关注开源项目动态、每篇加一句编辑点评..." style="height: 60px;"></textarea>
                             <button type="button" class="secondary-btn" style="margin-top:0.5rem;font-size:0.8rem;" onclick="previewBoardPrompt()">预览最终 Prompt</button>
-                            <div id="board-prompt-preview" class="board-prompt-preview" style="display:none;margin-top:0.5rem;"></div>
                         </div>
 
                         <div class="form-group-row">

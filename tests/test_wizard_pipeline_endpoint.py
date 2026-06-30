@@ -27,6 +27,25 @@ async def test_pipeline_ambiguous_returns_clarify(client):
 
 
 @pytest.mark.anyio
+async def test_pipeline_project_tools_returns_option_clarification(client):
+    with patch("app.api.routes.board_wizard.settings") as s, patch("app.api.routes.board_wizard.llm_service") as svc:
+        s.WIZARD_PIPELINE_ENABLED = True
+        svc.wizard_plan_sources = AsyncMock()
+        resp = await client.post(
+            "/api/v1/boards/wizard",
+            json={"messages": [{"role": "user", "content": "热门项目与工具"}]},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ready"] is False
+    assert data["config"] is None
+    assert data["clarification"]["allow_custom"] is True
+    assert data["clarification"]["options"][0]["id"] == "github_trending"
+    svc.wizard_plan_sources.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_pipeline_clear_returns_verified_config(client):
     plan = {"ready": True, "source_type": "rss", "slug": "ai", "name": "AI", "icon": "🤖"}
     pool = {
@@ -56,6 +75,7 @@ async def test_pipeline_clear_returns_verified_config(client):
             "icon": "🤖",
             "source_type": "rss",
             "source_config": {"feeds": ["https://a.com/feed"]},
+            "template_profile": {"goal": "筛出有用 AI 新闻", "selection_rules": ["官方优先"]},
             "system_prompt": "总结 AI 资讯",
         },
     }
@@ -80,6 +100,7 @@ async def test_pipeline_clear_returns_verified_config(client):
     data = resp.json()
     assert data["ready"] is True
     assert data["config"]["source_config"]["feeds"] == ["https://a.com/feed"]
+    assert data["config"]["template_profile"]["goal"] == "筛出有用 AI 新闻"
     # Response shape unchanged: source_validation + derived feed_validation present.
     assert data["source_validation"][0]["url"] == "https://a.com/feed"
     assert "trust_score" in data["source_validation"][0]

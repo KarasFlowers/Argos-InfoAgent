@@ -8,7 +8,7 @@ from sqlmodel import SQLModel, select
 
 from app.api import router
 from app.api.routes import board_wizard as board_wizard_router
-from app.models.domain import ContentCluster, DailySummary, NewsItem, Source
+from app.models.domain import Board, ContentCluster, DailySummary, NewsItem, Source
 from app.services.source_insights_service import (
     annotate_source_validation,
     get_source_coverage_analysis,
@@ -470,5 +470,71 @@ async def test_source_discovery_endpoint_skips_existing_sources_and_returns_new_
 
     assert payload["searched_terms"][0] == "agent news"
     assert payload["skipped_existing"] == ["https://existing.example/feed.xml"]
+    assert payload["localized_summary"] == "找到 2 个候选，验证通过 2 个；推荐新增 1 个，跳过已有 1 个，过滤 0 个。"
+    assert payload["stats"] == {
+        "candidate_count": 2,
+        "verified_count": 2,
+        "new_candidate_count": 1,
+        "selected_count": 1,
+        "discarded_count": 0,
+        "skipped_existing_count": 1,
+        "existing_source_count": 1,
+    }
+    assert payload["quality_report"]["selected_count"] == 1
     assert len(payload["suggestions"]) == 1
     assert payload["suggestions"][0]["url"] == "https://new.example/feed.xml"
+
+
+@pytest.mark.anyio
+async def test_sources_dashboard_includes_template_health_without_mutating_sources(isolated_session):
+    from app.api.routes.sources import get_sources_dashboard
+
+    board = Board(
+        slug="source-health",
+        name="Source Health",
+        source_type="rss",
+        source_config={"feeds": ["https://github.blog/feed/"]},
+        template_profile={
+            "goal": "发现热门项目与工具",
+            "selection_rules": ["优先具体开源项目、库、框架、CLI、SDK", "排除政策倡议、安全数据库、平台公告、公司声明"],
+        },
+    )
+    isolated_session.add(board)
+    await isolated_session.flush()
+    source = Source(
+        url="https://github.blog/feed/",
+        name="GitHub Blog",
+        source_type="rss",
+        board_id=board.id,
+        enabled=True,
+        health_status="healthy",
+    )
+    isolated_session.add(source)
+    await isolated_session.flush()
+    summary = DailySummary(
+        date="2026-06-28",
+        board_id=board.id,
+        overview="x",
+        perspective="overview",
+    )
+    isolated_session.add(summary)
+    await isolated_session.flush()
+    isolated_session.add(
+        NewsItem(
+            headline="GitHub joins alliance to change California AI transparency law",
+            category="policy",
+            key_points=["Company policy advocacy"],
+            tags=["policy"],
+            original_link="https://github.blog/policy",
+            source="GitHub Blog",
+            summary_id=summary.id,
+        )
+    )
+    await isolated_session.commit()
+
+    payload = await get_sources_dashboard(board=board.slug, session=isolated_session)
+
+    assert payload["summary"]["template_health_status"] == "ok"
+    assert payload["template_health"]["sources"][0]["source"] == "GitHub Blog"
+    assert payload["sources"][0]["template_match_rate"] == 0.0
+    assert payload["at_risk_sources"][0]["template_recommended_action"] == "建议降权或寻找替代来源"
