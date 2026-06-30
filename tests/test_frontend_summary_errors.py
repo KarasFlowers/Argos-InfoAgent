@@ -46,3 +46,27 @@ def test_summary_bootstrap_validates_board_before_board_scoped_requests():
     assert init_pos < saved_pos < summary_pos
     assert "_primeBoardSlugFromStorage();" not in js
     assert "localStorage.removeItem('argos_board')" in js
+
+
+def test_summary_run_status_ui_fetches_board_scoped_task_runs():
+    js = APP_JS.read_text(encoding="utf-8")
+    css = INDEX_CSS.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="summary-run-status" class="summary-run-status" role="status" aria-live="polite"' in html
+    assert "async function fetchSummaryRunStatus()" in js
+    assert "/api/v1/admin/tasks?kind=summary_generation&board_id=" in js
+    assert "renderSummaryRunStatus(latest);" in js
+    assert "window.setInterval(fetchSummaryRunStatus, 2500)" in js
+    assert "if (currentBoardSlug) {" in js
+    assert "url += `&board=${encodeURIComponent(currentBoardSlug)}`;" in js
+    assert "fetchSummaryWithUrl(url, '正在重新生成简报...');" in js
+    assert ".summary-run-status.is-running" in css
+    assert ".summary-run-status.is-done" in css
+    assert ".summary-run-status.is-failed" in css
+
+
+def test_summary_default_fetch_uses_lite_mode():
+    js = APP_JS.read_text(encoding="utf-8")
+
+    assert "if (!force && !date) params.push('lite=true');" in js

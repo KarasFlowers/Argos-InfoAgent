@@ -64,6 +64,7 @@ async def get_system_status(session: AsyncSession = Depends(get_session)):
 async def list_task_runs(
     kind: str | None = None,
     status: str | None = None,
+    board_id: int | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ):
@@ -73,6 +74,8 @@ async def list_task_runs(
         stmt = stmt.where(TaskRun.kind == kind)
     if status:
         stmt = stmt.where(TaskRun.status == status)
+    if board_id is not None:
+        stmt = stmt.where(TaskRun.board_id == board_id)
     stmt = stmt.limit(limit)
 
     result = await session.execute(stmt)

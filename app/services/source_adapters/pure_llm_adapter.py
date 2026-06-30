@@ -30,9 +30,13 @@ class PureLLMAdapter(SourceAdapter):
         session: AsyncSession,
         one_time_preference: str | None = None,
         since_hours: int = 24,  # noqa: ARG002 — pure LLM has no date filter
+        task_ref=None,
     ) -> "tuple[DailySummaryResponse | None, dict[str, str]]":
         # Lazy-import to avoid circulars.
         from app.services.llm_service import llm_service
+
+        if task_ref:
+            await task_ref.start_stage("generating_summary", current=2, total=4)
 
         summary = await llm_service.generate_pure_llm_summary(
             board=board,

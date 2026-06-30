@@ -107,9 +107,12 @@ if not errorlevel 1 (
 )
 
 REM --- 6) Start backend in a visible window -----------------------------
+set "UVICORN_RELOAD_ARG="
+if /i "%ARGOS_RELOAD%"=="true" set "UVICORN_RELOAD_ARG=--reload"
+
 echo Starting Argos backend...
 start "Argos Backend" powershell.exe -NoExit -ExecutionPolicy Bypass -Command ^
-    "& '%PROJECT_ROOT%\venv\Scripts\Activate.ps1'; Set-Location '%PROJECT_ROOT%'; uvicorn main:app --reload"
+    "& '%PROJECT_ROOT%\venv\Scripts\Activate.ps1'; Set-Location '%PROJECT_ROOT%'; uvicorn main:app %UVICORN_RELOAD_ARG%"
 
 REM --- 7) Poll /api/v1/ping until healthy (max ~30s) --------------------
 echo Waiting for server to become healthy...

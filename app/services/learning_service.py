@@ -266,6 +266,7 @@ async def rerank_summary_items(
     items: list,
     session: AsyncSession | None = None,
     board_id: int | None = None,
+    use_vectors: bool = True,
 ) -> list:
     """
     Rerank SummaryItem list by:
@@ -315,7 +316,9 @@ async def rerank_summary_items(
         items = filtered
 
     # --- Phase 2: Embedding-based reranking ---
-    positive_centroid, negative_centroid = await get_user_feedback_profiles(session=session, board_id=board_id)
+    positive_centroid, negative_centroid = (None, None)
+    if use_vectors:
+        positive_centroid, negative_centroid = await get_user_feedback_profiles(session=session, board_id=board_id)
 
     has_vectors = positive_centroid is not None or negative_centroid is not None
     has_prefs = any(prefs[k] for k in prefs)

@@ -358,11 +358,8 @@ class SummaryMixin:
                 logger.warning("Template match filter failed, proceeding without it: %s", err)
                 template_match_report = {"enabled": True, "error": str(err)}
 
-        # ---- URL cross-source dedup + AI semantic dedup ----
-        from app.services.dedup_service import (
-            merge_cross_source_duplicates,
-            merge_topic_duplicates,
-        )
+        # ---- URL cross-source dedup ----
+        from app.services.dedup_service import merge_cross_source_duplicates
 
         deduped_items = merge_cross_source_duplicates(content_items)
         if len(deduped_items) < len(content_items):
@@ -422,32 +419,35 @@ class SummaryMixin:
         high_quality, rec_report = await self._score_articles(limited_articles, interest_context=scoring_context)
         logger.info("Proceeding with %s high-quality articles for summarization.", len(high_quality))
 
-        # ---- AI semantic dedup on scored articles ----
-        # Re-wrap as lightweight ContentItem for the dedup call, then unwrap.
-        scored_ci = [
-            ContentItem(
-                id=f"tmp:{i}",
-                source_type=a.get("source", "rss"),
-                title=a["title"],
-                url=a["link"],
-                content=a.get("summary", ""),
-                source_name=a.get("source", ""),
-            )
-            for i, a in enumerate(high_quality)
-        ]
-        try:
-            deduped_ci = await merge_topic_duplicates(scored_ci, self.llm)
-            if len(deduped_ci) < len(scored_ci):
-                logger.info(
-                    "AI semantic dedup: %d -> %d items",
-                    len(scored_ci),
-                    len(deduped_ci),
+        if settings.SUMMARY_SEMANTIC_DEDUP_ENABLED:
+            # ---- AI semantic dedup on scored articles ----
+            # Re-wrap as lightweight ContentItem for the dedup call, then unwrap.
+            scored_ci = [
+                ContentItem(
+                    id=f"tmp:{i}",
+                    source_type=a.get("source", "rss"),
+                    title=a["title"],
+                    url=a["link"],
+                    content=a.get("summary", ""),
+                    source_name=a.get("source", ""),
                 )
-                # Map back to article dicts
-                keep_ids = {ci.id for ci in deduped_ci}
-                high_quality = [a for i, a in enumerate(high_quality) if f"tmp:{i}" in keep_ids]
-        except Exception as e:
-            logger.warning("AI semantic dedup failed, proceeding without: %s", e)
+                for i, a in enumerate(high_quality)
+            ]
+            try:
+                from app.services.dedup_service import merge_topic_duplicates
+
+                deduped_ci = await merge_topic_duplicates(scored_ci, self.llm)
+                if len(deduped_ci) < len(scored_ci):
+                    logger.info(
+                        "AI semantic dedup: %d -> %d items",
+                        len(scored_ci),
+                        len(deduped_ci),
+                    )
+                    # Map back to article dicts
+                    keep_ids = {ci.id for ci in deduped_ci}
+                    high_quality = [a for i, a in enumerate(high_quality) if f"tmp:{i}" in keep_ids]
+            except Exception as e:
+                logger.warning("AI semantic dedup failed, proceeding without: %s", e)
 
         input_json = json.dumps(high_quality, ensure_ascii=False)
 

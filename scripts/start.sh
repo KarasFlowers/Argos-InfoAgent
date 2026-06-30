@@ -155,7 +155,13 @@ fi
 
 # ---- 8) Start backend ----
 info "Starting Argos backend on $URL ..."
-"$UVICORN" main:app --host 127.0.0.1 --port "$PORT" --reload &
+RELOAD_ARGS=()
+case "${ARGOS_RELOAD:-}" in
+    true|1|yes|on)
+        RELOAD_ARGS=(--reload)
+        ;;
+esac
+"$UVICORN" main:app --host 127.0.0.1 --port "$PORT" "${RELOAD_ARGS[@]}" &
 SERVER_PID=$!
 
 # ---- 9) Wait for healthy ----

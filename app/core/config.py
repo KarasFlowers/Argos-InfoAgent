@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     FAST_LLM: str = ""
     SMART_LLM: str = ""
 
+    # Extra LLM pass for merging near-duplicate topics after scoring. Disabled
+    # by default because URL dedup + scoring already handle the common case, and
+    # this additional call is often one of the slowest parts of generation.
+    SUMMARY_SEMANTIC_DEDUP_ENABLED: bool = False
+
     # Board wizard: when True, use the multi-stage grounded pipeline
     # (plan → discover+verify real sources → finalize → preview). When False,
     # fall back to the legacy single-call wizard_suggest_board path.

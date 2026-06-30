@@ -213,93 +213,71 @@ def _trigger_catchup_backfill(board_id: int | None, board_slug: str, max_days: i
         logger.debug("No running loop for catchup backfill; skipped")
 
 
-@router.get("/summary", response_model=DailySummaryResponse)
-async def generate_summary(
-    force: bool = False,
-    date: str | None = None,
-    preference: str | None = None,
-    save_preference: bool = False,
-    board: str | None = None,
-    perspective: str = "overview",
-    session: AsyncSession = Depends(get_session),
+async def _prepare_summary_response(
+    session: AsyncSession,
+    summary,
+    board_obj,
+    board_id: int | None,
+    search_date: str,
+    *,
+    date: str | None,
+    lite: bool,
+    trigger_backfill: bool = True,
+    log_context: str = "summary",
 ):
-    """
-    Returns AI summary for today or a specific date, scoped to a board.
-    If board is not provided, falls back to the default board (tech).
-    If date is provided, only fetch from DB (no external generation for history).
-    """
-    search_date = date if date else datetime.now().strftime("%Y-%m-%d")
-    board_obj = await resolve_active_board(session, board)
-    board_id = board_obj.id if board_obj else None
-
-    if not force:
-        existing_summary = await db_service.get_summary_by_date(
-            session, search_date, board_id=board_id, perspective=perspective
+    """Apply response-time enrichments for a summary."""
+    try:
+        summary.top_news = await rerank_summary_items(
+            summary.top_news,
+            session=session,
+            board_id=board_id,
+            use_vectors=not lite,
         )
-        if existing_summary:
-            try:
-                existing_summary.top_news = await rerank_summary_items(
-                    existing_summary.top_news,
-                    session=session,
-                    board_id=board_id,
-                )
-            except Exception:
-                logger.debug("Persona reranking skipped (no feedback data or model not loaded)")
-            try:
-                await _mark_items_read(session, existing_summary.top_news, board_id)
-            except Exception:
-                logger.debug("Article read tracking skipped for %s", search_date)
-            if not date:
-                await _attach_auto_catchup(
-                    session,
-                    existing_summary,
-                    board_obj,
-                    board_id,
-                    search_date,
-                    log_context="cached summary",
-                )
-            await _attach_event_tracks(session, existing_summary, board_id)
-            await _attach_source_analysis(session, existing_summary, board_id)
-            await enrich_summary_explanations(existing_summary, session, board_id)
-            return existing_summary
+    except Exception:
+        logger.debug("Persona reranking skipped for %s", log_context)
 
-    if date and date != datetime.now().strftime("%Y-%m-%d"):
-        raise HTTPException(status_code=404, detail=f"No historical summary found for {date}.")
-
-    async with _summary_generation_lock:
-        if not force:
-            existing_summary = await db_service.get_summary_by_date(
-                session, search_date, board_id=board_id, perspective=perspective
+    if not lite:
+        try:
+            await _mark_items_read(session, summary.top_news, board_id)
+        except Exception:
+            logger.debug("Article read tracking skipped for %s", search_date)
+        if not date:
+            await _attach_auto_catchup(
+                session,
+                summary,
+                board_obj,
+                board_id,
+                search_date,
+                trigger_backfill=trigger_backfill,
+                log_context=log_context,
             )
-            if existing_summary:
-                try:
-                    existing_summary.top_news = await rerank_summary_items(
-                        existing_summary.top_news,
-                        session=session,
-                        board_id=board_id,
-                    )
-                except Exception:
-                    logger.debug("Persona reranking skipped for cached summary")
-                try:
-                    await _mark_items_read(session, existing_summary.top_news, board_id)
-                except Exception:
-                    logger.debug("Article read tracking skipped for %s", search_date)
-                if not date:
-                    await _attach_auto_catchup(
-                        session,
-                        existing_summary,
-                        board_obj,
-                        board_id,
-                        search_date,
-                        trigger_backfill=False,
-                        log_context="cached summary after lock",
-                    )
-                await _attach_event_tracks(session, existing_summary, board_id)
-                await _attach_source_analysis(session, existing_summary, board_id)
-                await enrich_summary_explanations(existing_summary, session, board_id)
-                return existing_summary
+        await _attach_event_tracks(session, summary, board_id)
+        await _attach_source_analysis(session, summary, board_id)
 
-        from app.services.source_adapters import UnknownSourceTypeError, get_adapter
+    await enrich_summary_explanations(summary, session, board_id)
+    return summary
+
+
+async def _generate_fresh_summary_response(
+    *,
+    session: AsyncSession,
+    board_obj,
+    board_id: int | None,
+    search_date: str,
+    force: bool,
+    date: str | None,
+    preference: str | None,
+    save_preference: bool,
+    perspective: str,
+    lite: bool,
+):
+    from app.core.scheduler import produce_summary_with_task_tracking, track_task_run
+    from app.services.source_adapters import UnknownSourceTypeError, get_adapter
+
+    trigger_type = "manual/api" if force else "api"
+    async with track_task_run("summary_generation", trigger_type=trigger_type, board_id=board_id) as tr:
+        tr.progress_total = 4
+        await tr.start_stage("fetching", current=1, total=4)
 
         if board_obj is None:
             raise HTTPException(status_code=500, detail="No board configured — cannot generate summary.")
@@ -316,11 +294,14 @@ async def generate_summary(
             logger.error("Board '%s' has unsupported source_type: %s", board_obj.slug, error)
             raise HTTPException(status_code=500, detail=str(error)) from error
 
-        summary, content_fallback = await adapter.produce(
+        summary, content_fallback = await produce_summary_with_task_tracking(
+            adapter=adapter,
             board=board_obj,
             session=session,
+            task_ref=tr,
             one_time_preference=preference,
         )
+        content_fallback = content_fallback or {}
 
         if not summary:
             raise HTTPException(status_code=500, detail="Failed to generate AI summary.")
@@ -330,6 +311,7 @@ async def generate_summary(
             active_perspectives = board_obj.perspectives.get("active")
 
         if active_perspectives and len(active_perspectives) > 1:
+            await tr.start_stage("generating_summary", current=2, total=4)
             perspective_results = await llm_service.generate_perspective_summaries(
                 content_items=[],
                 session=session,
@@ -338,6 +320,7 @@ async def generate_summary(
                 seed_summary=summary,
             )
 
+            await tr.start_stage("saving_summary", current=3, total=4)
             for persp_summary, _persp_fallback in perspective_results:
                 if persp_summary:
                     try:
@@ -363,6 +346,7 @@ async def generate_summary(
                 requested = perspective_results[0][0] if perspective_results else summary
             summary = requested
         else:
+            await tr.start_stage("saving_summary", current=3, total=4)
             try:
                 if force:
                     await db_service.replace_summary(session, summary, board_id=board_id)
@@ -375,23 +359,21 @@ async def generate_summary(
                     session, search_date, board_id=board_id, perspective=perspective
                 )
                 if existing_summary:
-                    try:
-                        await _mark_items_read(session, existing_summary.top_news, board_id)
-                    except Exception:
-                        logger.debug("Article read tracking skipped for %s", search_date)
-                    if not date:
-                        await _attach_auto_catchup(
-                            session,
-                            existing_summary,
-                            board_obj,
-                            board_id,
-                            search_date,
-                            trigger_backfill=False,
-                            log_context="integrity fallback summary",
-                        )
-                    await _attach_event_tracks(session, existing_summary, board_id)
-                    await _attach_source_analysis(session, existing_summary, board_id)
-                    await enrich_summary_explanations(existing_summary, session, board_id)
+                    await tr.start_stage("post_processing", current=4, total=4)
+                    await _prepare_summary_response(
+                        session,
+                        existing_summary,
+                        board_obj,
+                        board_id,
+                        search_date,
+                        date=date,
+                        lite=lite,
+                        trigger_backfill=False,
+                        log_context="integrity fallback summary",
+                    )
+                    tr.progress_label = "done"
+                    tr.progress_current = 4
+                    await tr.save_progress()
                     return existing_summary
                 raise HTTPException(status_code=500, detail="Failed to save AI summary.") from None
             except Exception as exc:
@@ -409,6 +391,7 @@ async def generate_summary(
                     detail="Summary was generated but the preference could not be saved.",
                 ) from exc
 
+        await tr.start_stage("post_processing", current=4, total=4)
         if settings.RAG_ENABLED and settings.RAG_BACKGROUND_INGEST_ENABLED:
             from app.services.rag_service import enqueue_for_ingest
 
@@ -420,28 +403,94 @@ async def generate_summary(
             session, search_date, board_id=board_id, perspective=perspective
         )
         final = stored_summary or summary
-        try:
-            final.top_news = await rerank_summary_items(
-                final.top_news,
-                session=session,
-                board_id=board_id,
-            )
-        except Exception:
-            logger.debug("Persona reranking skipped for fresh summary")
-        try:
-            await _mark_items_read(session, final.top_news, board_id)
-        except Exception:
-            logger.debug("Article read tracking skipped for %s", search_date)
-        if not date:
-            await _attach_auto_catchup(
+        await _prepare_summary_response(
+            session,
+            final,
+            board_obj,
+            board_id,
+            search_date,
+            date=date,
+            lite=lite,
+            log_context="fresh summary",
+        )
+        tr.progress_label = "done"
+        tr.progress_current = 4
+        await tr.save_progress()
+        return final
+
+
+@router.get("/summary", response_model=DailySummaryResponse)
+async def generate_summary(
+    force: bool = False,
+    date: str | None = None,
+    preference: str | None = None,
+    save_preference: bool = False,
+    board: str | None = None,
+    perspective: str = "overview",
+    lite: bool = False,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Returns AI summary for today or a specific date, scoped to a board.
+    If board is not provided, falls back to the default board (tech).
+    If date is provided, only fetch from DB (no external generation for history).
+    """
+    search_date = date if date else datetime.now().strftime("%Y-%m-%d")
+    board_obj = await resolve_active_board(session, board)
+    board_id = board_obj.id if board_obj else None
+
+    if not force:
+        existing_summary = await db_service.get_summary_by_date(
+            session, search_date, board_id=board_id, perspective=perspective
+        )
+        if existing_summary:
+            return await _prepare_summary_response(
                 session,
-                final,
+                existing_summary,
                 board_obj,
                 board_id,
                 search_date,
-                log_context="fresh summary",
+                date=date,
+                lite=lite,
+                log_context="cached summary",
             )
-        await _attach_event_tracks(session, final, board_id)
-        await _attach_source_analysis(session, final, board_id)
-        await enrich_summary_explanations(final, session, board_id)
-        return final
+
+    if date and date != datetime.now().strftime("%Y-%m-%d"):
+        raise HTTPException(status_code=404, detail=f"No historical summary found for {date}.")
+
+    async with _summary_generation_lock:
+        if not force:
+            existing_summary = await db_service.get_summary_by_date(
+                session, search_date, board_id=board_id, perspective=perspective
+            )
+            if existing_summary:
+                return await _prepare_summary_response(
+                    session,
+                    existing_summary,
+                    board_obj,
+                    board_id,
+                    search_date,
+                    date=date,
+                    lite=lite,
+                    trigger_backfill=False,
+                    log_context="cached summary after lock",
+                )
+
+        try:
+            return await _generate_fresh_summary_response(
+                session=session,
+                board_obj=board_obj,
+                board_id=board_id,
+                search_date=search_date,
+                force=force,
+                date=date,
+                preference=preference,
+                save_preference=save_preference,
+                perspective=perspective,
+                lite=lite,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Summary generation failed for %s", search_date)
+            raise HTTPException(status_code=500, detail="Failed to generate AI summary.") from exc
